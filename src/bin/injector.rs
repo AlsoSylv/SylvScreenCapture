@@ -3,8 +3,8 @@
 
 use egui::{Color32, ColorImage, Frame, Image, TextureOptions};
 use std::env;
-use std::ffi::CString;
-use std::sync::{Arc, Once};
+use std::ffi::{CStr, CString};
+use std::sync::Arc;
 use std::time::Duration;
 use sysinfo::{ProcessRefreshKind, RefreshKind, System};
 use windows::core::{s, w, Interface, PCSTR};
@@ -187,7 +187,6 @@ fn main() {
 
                             render_target = new_render_target;
                         }
-                        // todo!("The window was resized to width: {width} and height: {height}")
                     }
                     WindowEvent::RedrawRequested => {
                         if let Some(render_target) = &render_target {
@@ -268,7 +267,6 @@ fn main() {
         .unwrap();
 }
 
-#[allow(unused)]
 fn inject(process_name: &str) -> Result<(), ()> {
     const KERNEL_32_DLL: PCSTR = s!("kernel32.dll");
     const LOAD_LIBRARY_A_C: PCSTR = s!("LoadLibraryA");

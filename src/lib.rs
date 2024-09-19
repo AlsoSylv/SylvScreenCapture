@@ -1,22 +1,18 @@
 use retour::RawDetour;
 use std::ffi::c_void;
-use std::mem::ManuallyDrop;
-use std::ptr::null_mut;
 use std::sync::{Once, OnceLock};
-use windows::core::w;
+use windows::core::{w, PCWSTR};
 use windows::Win32::Graphics::Direct3D11::{ID3D11Device1, D3D11_TEXTURE2D_DESC};
 use windows::Win32::Graphics::Dxgi::{DXGI_SHARED_RESOURCE_READ, DXGI_SHARED_RESOURCE_WRITE};
+use windows::Win32::System::SystemServices;
 use windows::{
     core::{s, Interface, HRESULT, PCSTR},
     Win32::{
         Foundation::{BOOL, HINSTANCE, HMODULE, HWND, LPARAM, LRESULT, WPARAM},
         Graphics::{
-            Direct3D::{
-                D3D_DRIVER_TYPE_HARDWARE, D3D_FEATURE_LEVEL, D3D_FEATURE_LEVEL_10_1,
-                D3D_FEATURE_LEVEL_11_0,
-            },
+            Direct3D::D3D_DRIVER_TYPE_HARDWARE,
             Direct3D11::{
-                D3D11CreateDeviceAndSwapChain, ID3D11Device, ID3D11DeviceContext, ID3D11Texture2D,
+                D3D11CreateDeviceAndSwapChain, ID3D11Device, ID3D11Texture2D,
                 D3D11_CREATE_DEVICE_FLAG, D3D11_SDK_VERSION,
             },
             Dxgi::{
@@ -33,7 +29,6 @@ use windows::{
         System::{
             Console::AllocConsole,
             LibraryLoader::{DisableThreadLibraryCalls, GetModuleHandleA, GetProcAddress},
-            SystemServices::DLL_PROCESS_ATTACH,
         },
         UI::WindowsAndMessaging::{
             CreateWindowExA, DefWindowProcA, DestroyWindow, RegisterClassExA, UnregisterClassA,
@@ -43,29 +38,95 @@ use windows::{
     },
 };
 
-// Export this main as DllMain
-#[export_name = "DllMain"]
-pub extern "stdcall" fn main(
-    hinst_dll: HINSTANCE,
-    fdw_reason: u32,
-    _lpv_reserved: *mut c_void,
-) -> BOOL {
-    unsafe {
-        DisableThreadLibraryCalls(hinst_dll).unwrap();
+use error::Error;
+
+mod error {
+    #[derive(Debug)]
+    pub enum Error {
+        Win32(windows::core::Error),
+        Detour(retour::Error),
     }
 
-    if fdw_reason == DLL_PROCESS_ATTACH {
+    impl std::fmt::Display for Error {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Error::Win32(e) => e.fmt(f)?,
+                Error::Detour(e) => e.fmt(f)?,
+            };
+
+            Ok(())
+        }
+    }
+
+    impl std::error::Error for Error {}
+
+    impl From<retour::Error> for Error {
+        fn from(value: retour::Error) -> Self {
+            Error::Detour(value)
+        }
+    }
+
+    impl From<windows::core::Error> for Error {
+        fn from(value: windows::core::Error) -> Self {
+            Error::Win32(value)
+        }
+    }
+}
+
+#[derive(PartialEq)]
+enum Reason {
+    DllProcessAttach,
+    DllProcessDetach,
+}
+
+type PresentFunctionType = unsafe extern "system" fn(*mut c_void, u32, DXGI_PRESENT) -> HRESULT;
+
+static DETOUR: OnceLock<RawDetour> = OnceLock::new();
+
+static SHARED_BUFFER: OnceLock<ID3D11Texture2D> = OnceLock::new();
+
+static TRAMPOLINE: OnceLock<PresentFunctionType> = OnceLock::new();
+
+// Export this main as DllMain
+#[export_name = "DllMain"]
+pub extern "stdcall" fn dll_main(hinst_dll: HINSTANCE, fdw_reason: u32, _: *mut c_void) -> BOOL {
+    let reason = if fdw_reason == SystemServices::DLL_PROCESS_DETACH {
+        Reason::DllProcessDetach
+    } else if fdw_reason == SystemServices::DLL_PROCESS_ATTACH {
+        Reason::DllProcessAttach
+    } else {
+        return BOOL(1);
+    };
+
+    let success = if let Err(e) = main(hinst_dll, reason) {
+        println!("{e}");
+        false
+    } else {
+        true
+    };
+
+    BOOL(success as i32)
+}
+
+fn main(hinst_dll: HINSTANCE, reason: Reason) -> Result<(), Error> {
+    if reason == Reason::DllProcessAttach {
         #[cfg(debug_assertions)]
         unsafe {
-            AllocConsole().unwrap();
+            AllocConsole()?;
+        }
+
+        unsafe {
+            DisableThreadLibraryCalls(hinst_dll)?;
         }
 
         std::thread::spawn(|| {
-            dll_attach(null_mut());
+            if let Err(e) = dll_attach() {
+                println!("{e}");
+            }
         });
-    }
+    };
 
-    true.into()
+    Ok(())
 }
 
 // Workaround
@@ -78,7 +139,7 @@ unsafe extern "system" fn def_window_pro_a(
     DefWindowProcA(hwnd, msg, wparam, lparam)
 }
 
-fn dll_attach(_base: *mut c_void) -> u32 {
+fn dll_attach() -> Result<(), Error> {
     const WINDOW_CLASS_NAME: PCSTR = s!("dummy_window_for_swap_chain");
     const DX_MODULE_NAME: PCSTR = s!("d3d11.dll");
     const SWAP_CHAIN_FUNCTION_NAME: PCSTR = s!("D3D11CreateDeviceAndSwapChain");
@@ -101,7 +162,7 @@ fn dll_attach(_base: *mut c_void) -> u32 {
     let registered_window_class = unsafe { RegisterClassExA(&window_class) };
 
     if registered_window_class == 0 {
-        return 1;
+        Err(windows::core::Error::from_win32())?
     }
 
     let window = unsafe {
@@ -118,152 +179,111 @@ fn dll_attach(_base: *mut c_void) -> u32 {
             None,
             window_class.hInstance,
             None,
-        )
-        .unwrap()
+        )?
     };
 
-    if window.0.is_null() {
-        return 1;
+    let lib_d3d11: HMODULE = unsafe { GetModuleHandleA(DX_MODULE_NAME)? };
+
+    if unsafe { GetProcAddress(lib_d3d11, SWAP_CHAIN_FUNCTION_NAME) }.is_none() {
+        Err(windows::core::Error::from_win32())?
     }
 
-    let lib_d3d11: HMODULE = unsafe { GetModuleHandleA(DX_MODULE_NAME).unwrap() };
-    if lib_d3d11.0.is_null() {
-        return 1;
-    }
-
-    let d3d11_create_device_and_swap_chain =
-        unsafe { GetProcAddress(lib_d3d11, SWAP_CHAIN_FUNCTION_NAME) };
-    if d3d11_create_device_and_swap_chain.is_none() {
-        return 1;
-    }
-
-    let refresh_rate = DXGI_RATIONAL {
-        Numerator: 60,
-        Denominator: 1,
-    };
-    let buffer_desc = DXGI_MODE_DESC {
-        Width: 100,
-        Height: 100,
-        RefreshRate: refresh_rate,
-        Format: DXGI_FORMAT_R8G8B8A8_UNORM,
-        ScanlineOrdering: DXGI_MODE_SCANLINE_ORDER_UNSPECIFIED,
-        Scaling: DXGI_MODE_SCALING_UNSPECIFIED,
-    };
-    let sample_desc = DXGI_SAMPLE_DESC {
-        Count: 1,
-        Quality: 0,
-    };
     let swap_chain_desc = DXGI_SWAP_CHAIN_DESC {
-        BufferDesc: buffer_desc,
-        SampleDesc: sample_desc,
+        BufferDesc: DXGI_MODE_DESC {
+            Width: 100,
+            Height: 100,
+            RefreshRate: DXGI_RATIONAL {
+                Numerator: 60,
+                Denominator: 1,
+            },
+            Format: DXGI_FORMAT_R8G8B8A8_UNORM,
+            ScanlineOrdering: DXGI_MODE_SCANLINE_ORDER_UNSPECIFIED,
+            Scaling: DXGI_MODE_SCALING_UNSPECIFIED,
+        },
+        SampleDesc: DXGI_SAMPLE_DESC {
+            Count: 1,
+            Quality: 0,
+        },
         BufferUsage: DXGI_USAGE_RENDER_TARGET_OUTPUT,
         BufferCount: 1,
         OutputWindow: window,
-        Windowed: true.into(),
+        Windowed: BOOL(true as i32),
         SwapEffect: DXGI_SWAP_EFFECT_DISCARD,
         Flags: DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH.0 as u32,
     };
 
     let mut swap_chain: Option<IDXGISwapChain> = None;
-    let mut device: Option<ID3D11Device> = None;
-    let mut context: Option<ID3D11DeviceContext> = None;
-    let mut d3d_feature_level: D3D_FEATURE_LEVEL = D3D_FEATURE_LEVEL::default();
 
     unsafe {
         D3D11CreateDeviceAndSwapChain(
             None,
             D3D_DRIVER_TYPE_HARDWARE,
             None,
-            D3D11_CREATE_DEVICE_FLAG::default(),
-            Some(&[D3D_FEATURE_LEVEL_10_1, D3D_FEATURE_LEVEL_11_0]),
+            D3D11_CREATE_DEVICE_FLAG(0),
+            None,
             D3D11_SDK_VERSION,
             Some(&swap_chain_desc),
             Some(&mut swap_chain),
-            Some(&mut device),
-            Some(&mut d3d_feature_level),
-            Some(&mut context),
-        )
-        .unwrap();
+            None,
+            None,
+            None,
+        )?;
     };
 
-    let Some(swap_chain) = swap_chain else {
-        return 1;
-    };
+    let swap_chain = swap_chain.unwrap();
 
-    let present_function: unsafe extern "system" fn(*mut c_void, u32, DXGI_PRESENT) -> HRESULT =
-        swap_chain.vtable().Present;
+    let present_function: PresentFunctionType = swap_chain.vtable().Present;
 
     unsafe {
-        DestroyWindow(window).unwrap();
-        UnregisterClassA(WINDOW_CLASS_NAME, window_class.hInstance).unwrap();
+        DestroyWindow(window)?;
+        UnregisterClassA(WINDOW_CLASS_NAME, window_class.hInstance)?;
     }
 
-    let new_detour = unsafe { RawDetour::new(present_function as _, new_present_function as _) };
+    let detour = unsafe { RawDetour::new(present_function as _, new_present_function as _)? };
 
-    match new_detour {
-        Ok(detour) => {
-            let detour = ManuallyDrop::new(detour);
+    unsafe { detour.enable()? };
 
-            if let Err(e) = unsafe { detour.enable() } {
-                println!("{e}");
-                return 1;
-            }
+    let tramponline: PresentFunctionType = unsafe { std::mem::transmute(detour.trampoline()) };
 
-            TRAMPOLINE
-                .set(unsafe {
-                    std::mem::transmute::<
-                        &(),
-                        unsafe extern "system" fn(*mut c_void, u32, DXGI_PRESENT) -> HRESULT,
-                    >(detour.trampoline())
-                })
-                .unwrap();
-        }
-        Err(e) => {
-            println!("{e}")
-        }
-    }
+    TRAMPOLINE.get_or_init(|| tramponline);
+    DETOUR.get_or_init(|| detour);
 
-    0
+    Ok(())
 }
 
-static SHARED_BUFFER: OnceLock<ID3D11Texture2D> = OnceLock::new();
+fn new_present_function(this: *mut c_void, sync_internal: u32, flags: DXGI_PRESENT) -> HRESULT {
+    const SHARED_WINDOW_NAME: PCWSTR = w!("Sylvia's_Shared_Texture");
 
-static TRAMPOLINE: OnceLock<unsafe extern "system" fn(*mut c_void, u32, DXGI_PRESENT) -> HRESULT> =
-    OnceLock::new();
+    let this = unsafe { IDXGISwapChain::from_raw(this) };
+    let device: ID3D11Device = unsafe { this.GetDevice() }.unwrap();
+    let device_1: ID3D11Device1 = device.cast().unwrap();
 
-unsafe fn new_present_function(
-    __this: *mut c_void,
-    sync_internal: u32,
-    flags: DXGI_PRESENT,
-) -> HRESULT {
     if let Some(shared_buffer) = SHARED_BUFFER.get() {
-        let this = IDXGISwapChain::from_raw(__this);
+        let context = unsafe { device.GetImmediateContext() }.unwrap();
+        let back_buffer: ID3D11Texture2D = unsafe { this.GetBuffer(0) }.unwrap();
 
-        let device: ID3D11Device = this.GetDevice().unwrap();
-        let context = device.GetImmediateContext().unwrap();
+        #[cfg(debug_assertions)]
+        {
+            static DESCRIPTION: Once = Once::new();
 
-        let texture: ID3D11Texture2D = this.GetBuffer(0).unwrap();
+            DESCRIPTION.call_once(|| {
+                let mut desc = D3D11_TEXTURE2D_DESC::default();
 
-        static ONCE: Once = Once::new();
+                unsafe { back_buffer.GetDesc(&mut desc) };
 
-        ONCE.call_once(|| {
-            let mut desc = D3D11_TEXTURE2D_DESC::default();
+                println!("{:?}", desc);
+            });
+        }
 
-            texture.GetDesc(&mut desc);
-
-            println!("{:?}", desc);
-        });
-
-        context.CopyResource(shared_buffer, &texture);
+        unsafe { context.CopyResource(shared_buffer, &back_buffer) };
     } else {
-        let this = IDXGISwapChain::from_raw(__this);
+        let shared_resource_rights = DXGI_SHARED_RESOURCE_READ | DXGI_SHARED_RESOURCE_WRITE;
 
-        let device: ID3D11Device1 = this.GetDevice().unwrap();
+        let maybe_shared_buffer = unsafe {
+            device_1.OpenSharedResourceByName(SHARED_WINDOW_NAME, shared_resource_rights.0)
+        };
 
-        match device.OpenSharedResourceByName::<_, ID3D11Texture2D>(
-            w!("Sylvia's_Shared_Texture"),
-            (DXGI_SHARED_RESOURCE_READ | DXGI_SHARED_RESOURCE_WRITE).0,
-        ) {
+        match maybe_shared_buffer {
             Ok(shared_buffer) => {
                 SHARED_BUFFER.get_or_init(|| shared_buffer);
             }
@@ -276,5 +296,6 @@ unsafe fn new_present_function(
     let present_function = TRAMPOLINE
         .get()
         .expect("The trampoline was set before this was ever called.");
-    present_function(__this, sync_internal, flags)
+
+    unsafe { present_function(this.as_raw(), sync_internal, flags) }
 }
