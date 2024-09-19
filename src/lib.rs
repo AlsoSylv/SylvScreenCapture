@@ -8,7 +8,7 @@ use windows::Win32::System::SystemServices;
 use windows::{
     core::{s, Interface, HRESULT, PCSTR},
     Win32::{
-        Foundation::{BOOL, HINSTANCE, HMODULE, HWND, LPARAM, LRESULT, WPARAM},
+        Foundation::{BOOL, HINSTANCE, HWND, LPARAM, LRESULT, WPARAM},
         Graphics::{
             Direct3D::D3D_DRIVER_TYPE_HARDWARE,
             Direct3D11::{
@@ -28,7 +28,7 @@ use windows::{
         },
         System::{
             Console::AllocConsole,
-            LibraryLoader::{DisableThreadLibraryCalls, GetModuleHandleA, GetProcAddress},
+            LibraryLoader::{DisableThreadLibraryCalls, GetModuleHandleA},
         },
         UI::WindowsAndMessaging::{
             CreateWindowExA, DefWindowProcA, DestroyWindow, RegisterClassExA, UnregisterClassA,
@@ -141,8 +141,6 @@ unsafe extern "system" fn def_window_pro_a(
 
 fn dll_attach() -> Result<(), Error> {
     const WINDOW_CLASS_NAME: PCSTR = s!("dummy_window_for_swap_chain");
-    const DX_MODULE_NAME: PCSTR = s!("d3d11.dll");
-    const SWAP_CHAIN_FUNCTION_NAME: PCSTR = s!("D3D11CreateDeviceAndSwapChain");
 
     let window_class = WNDCLASSEXA {
         cbSize: size_of::<WNDCLASSEXA>() as u32,
@@ -181,12 +179,6 @@ fn dll_attach() -> Result<(), Error> {
             None,
         )?
     };
-
-    let lib_d3d11: HMODULE = unsafe { GetModuleHandleA(DX_MODULE_NAME)? };
-
-    if unsafe { GetProcAddress(lib_d3d11, SWAP_CHAIN_FUNCTION_NAME) }.is_none() {
-        Err(windows::core::Error::from_win32())?
-    }
 
     let swap_chain_desc = DXGI_SWAP_CHAIN_DESC {
         BufferDesc: DXGI_MODE_DESC {
