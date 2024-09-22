@@ -1,9 +1,13 @@
+use interprocess::local_socket::traits::Stream as StreamTrait;
+use interprocess::local_socket::{GenericNamespaced, Stream, ToNsName};
 use retour::RawDetour;
 use std::ffi::c_void;
+use std::io::{ErrorKind, Read, Write};
+use std::ptr::null_mut;
+use std::sync::atomic::AtomicPtr;
 use std::sync::{Once, OnceLock};
-use windows::core::{w, PCWSTR};
+use windows::Win32::Foundation::HANDLE;
 use windows::Win32::Graphics::Direct3D11::{ID3D11Device1, D3D11_TEXTURE2D_DESC};
-use windows::Win32::Graphics::Dxgi::{DXGI_SHARED_RESOURCE_READ, DXGI_SHARED_RESOURCE_WRITE};
 use windows::Win32::System::SystemServices;
 use windows::{
     core::{s, Interface, HRESULT, PCSTR},
@@ -85,6 +89,8 @@ static SHARED_BUFFER: OnceLock<ID3D11Texture2D> = OnceLock::new();
 
 static TRAMPOLINE: OnceLock<PresentFunctionType> = OnceLock::new();
 
+static SHARED_HANDLE: AtomicPtr<c_void> = AtomicPtr::new(null_mut());
+
 // Export this main as DllMain
 #[export_name = "DllMain"]
 pub extern "stdcall" fn dll_main(hinst_dll: HINSTANCE, fdw_reason: u32, _: *mut c_void) -> BOOL {
@@ -108,7 +114,6 @@ pub extern "stdcall" fn dll_main(hinst_dll: HINSTANCE, fdw_reason: u32, _: *mut 
 
 fn main(hinst_dll: HINSTANCE, reason: Reason) -> Result<(), Error> {
     if reason == Reason::DllProcessAttach {
-        #[cfg(debug_assertions)]
         unsafe {
             AllocConsole()?;
         }
@@ -238,12 +243,37 @@ fn dll_attach() -> Result<(), Error> {
     TRAMPOLINE.get_or_init(|| tramponline);
     DETOUR.get_or_init(|| detour);
 
+    let name = r"\\.\pipe\sylvias_shared_handle.sock"
+        .to_ns_name::<GenericNamespaced>()
+        .unwrap();
+
+    let mut try_connect = Stream::connect(name.clone());
+
+    let mut stream = loop {
+        match try_connect {
+            Err(e) if e.kind() == ErrorKind::NotFound => {
+                try_connect = Stream::connect(name.clone());
+            }
+            Err(e) => {
+                println!("{e}");
+                try_connect = Stream::connect(name.clone());
+            }
+            Ok(stream) => {
+                break stream;
+            }
+        }
+    };
+
+    stream.write(&std::process::id().to_le_bytes()).unwrap();
+    let mut handle = [0; 8];
+    stream.read_exact(&mut handle).unwrap();
+    let ptr = isize::from_le_bytes(handle);
+    SHARED_HANDLE.store(ptr as _, std::sync::atomic::Ordering::Relaxed);
+
     Ok(())
 }
 
 fn new_present_function(this: *mut c_void, sync_internal: u32, flags: DXGI_PRESENT) -> HRESULT {
-    const SHARED_WINDOW_NAME: PCWSTR = w!("Sylvia's_Shared_Texture");
-
     let this = unsafe { IDXGISwapChain::from_raw(this) };
     let device: ID3D11Device = unsafe { this.GetDevice() }.unwrap();
     let device_1: ID3D11Device1 = device.cast().unwrap();
@@ -267,18 +297,18 @@ fn new_present_function(this: *mut c_void, sync_internal: u32, flags: DXGI_PRESE
 
         unsafe { context.CopyResource(shared_buffer, &back_buffer) };
     } else {
-        let shared_resource_rights = DXGI_SHARED_RESOURCE_READ | DXGI_SHARED_RESOURCE_WRITE;
+        let handle = SHARED_HANDLE.load(std::sync::atomic::Ordering::Relaxed);
 
-        let maybe_shared_buffer = unsafe {
-            device_1.OpenSharedResourceByName(SHARED_WINDOW_NAME, shared_resource_rights.0)
-        };
+        if !handle.is_null() {
+            let maybe_shared_buffer = unsafe { device_1.OpenSharedResource1(HANDLE(handle)) };
 
-        match maybe_shared_buffer {
-            Ok(shared_buffer) => {
-                SHARED_BUFFER.get_or_init(|| shared_buffer);
-            }
-            Err(e) => {
-                println!("Error opening shared texture: {e}")
+            match maybe_shared_buffer {
+                Ok(shared_buffer) => {
+                    SHARED_BUFFER.get_or_init(|| shared_buffer);
+                }
+                Err(e) => {
+                    println!("Error opening shared texture: {e}")
+                }
             }
         }
     }

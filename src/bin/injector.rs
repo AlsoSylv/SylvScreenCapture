@@ -2,12 +2,16 @@
 //!
 
 use egui::{Color32, ColorImage, Frame, Image, TextureOptions};
+use interprocess::local_socket::traits::ListenerExt;
+use interprocess::local_socket::{GenericNamespaced, Listener, ListenerOptions, ToNsName};
 use std::env;
 use std::ffi::{CStr, CString};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::sync::Arc;
 use std::time::Duration;
 use sysinfo::{ProcessRefreshKind, RefreshKind, System};
 use windows::core::{s, w, Interface, PCSTR};
+use windows::Win32::Foundation::{DuplicateHandle, DUPLICATE_HANDLE_OPTIONS, HANDLE};
 use windows::Win32::Graphics::Direct3D11::{
     ID3D11Texture2D, D3D11_BIND_RENDER_TARGET, D3D11_BIND_SHADER_RESOURCE, D3D11_CPU_ACCESS_READ,
     D3D11_MAPPED_SUBRESOURCE, D3D11_MAP_READ, D3D11_RESOURCE_MISC_SHARED,
@@ -25,8 +29,8 @@ use windows::Win32::System::Diagnostics::Debug::WriteProcessMemory;
 use windows::Win32::System::LibraryLoader::{GetModuleHandleA, GetProcAddress};
 use windows::Win32::System::Memory::{VirtualAllocEx, MEM_COMMIT, MEM_RESERVE, PAGE_READWRITE};
 use windows::Win32::System::Threading::{
-    CreateRemoteThread, OpenProcess, PROCESS_CREATE_THREAD, PROCESS_QUERY_INFORMATION,
-    PROCESS_VM_OPERATION, PROCESS_VM_READ, PROCESS_VM_WRITE,
+    CreateRemoteThread, OpenProcess, PROCESS_CREATE_THREAD, PROCESS_DUP_HANDLE,
+    PROCESS_QUERY_INFORMATION, PROCESS_VM_OPERATION, PROCESS_VM_READ, PROCESS_VM_WRITE,
 };
 use winit::dpi::PhysicalSize;
 use winit::event::{Event, WindowEvent};
@@ -109,7 +113,7 @@ fn main() {
             .CreateSharedHandle(
                 None,
                 DXGI_SHARED_RESOURCE_READ.0 | DXGI_SHARED_RESOURCE_WRITE.0,
-                w!("Sylvia's_Shared_Texture"),
+                None,
             )
             .unwrap()
     };
@@ -139,7 +143,18 @@ fn main() {
         return;
     }
     let process_name = env::args().nth(1).unwrap();
-    inject(&process_name).expect("AAA");
+
+    let opts = ListenerOptions::new()
+        .name(
+            r"\\.\pipe\sylvias_shared_handle.sock"
+                .to_ns_name::<GenericNamespaced>()
+                .unwrap(),
+        )
+        .nonblocking(interprocess::local_socket::ListenerNonblockingMode::Accept);
+
+    let mut listener = opts.create_sync().unwrap();
+
+    let shared_handle = inject(&process_name, maybe_handle).expect("AAA");
 
     std::thread::sleep(Duration::from_secs(2));
 
@@ -257,6 +272,14 @@ fn main() {
                             unsafe {
                                 swap_chain.Present(1, DXGI_PRESENT(0)).unwrap();
                             }
+
+                            if let Some(Ok(mut listener)) = listener.next() {
+                                let mut pid_buffer = [0; 4];
+                                listener.read_exact(&mut pid_buffer).unwrap();
+                                listener
+                                    .write(&(shared_handle.0 as isize).to_le_bytes())
+                                    .unwrap();
+                            }
                         }
                     }
                     _ => {}
@@ -267,7 +290,7 @@ fn main() {
         .unwrap();
 }
 
-fn inject(process_name: &str) -> Result<(), ()> {
+fn inject(process_name: &str, original_shared_handle: HANDLE) -> Result<HANDLE, ()> {
     const KERNEL_32_DLL: PCSTR = s!("kernel32.dll");
     const LOAD_LIBRARY_A_C: PCSTR = s!("LoadLibraryA");
 
@@ -284,10 +307,26 @@ fn inject(process_name: &str) -> Result<(), ()> {
         | PROCESS_QUERY_INFORMATION
         | PROCESS_VM_OPERATION
         | PROCESS_VM_READ
-        | PROCESS_VM_WRITE;
+        | PROCESS_VM_WRITE
+        | PROCESS_DUP_HANDLE;
+
+    let mut shared_handle = HANDLE::default();
 
     unsafe {
         let process_handle = OpenProcess(process_attach_rights, false, pid).unwrap();
+
+        let source_process = OpenProcess(process_attach_rights, false, std::process::id()).unwrap();
+
+        DuplicateHandle(
+            source_process,
+            original_shared_handle,
+            process_handle,
+            &mut shared_handle,
+            DXGI_SHARED_RESOURCE_READ.0 | DXGI_SHARED_RESOURCE_WRITE.0,
+            false,
+            DUPLICATE_HANDLE_OPTIONS::default(),
+        )
+        .unwrap();
 
         if process_handle.0.is_null() {
             return Err(());
@@ -331,5 +370,5 @@ fn inject(process_name: &str) -> Result<(), ()> {
         .unwrap();
     }
 
-    Ok(())
+    Ok(shared_handle)
 }
