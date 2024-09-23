@@ -210,7 +210,7 @@ fn dll_attach_dx9() -> Result<(), Error> {
         )?
     };
 
-    let d3d9 = unsafe { Direct3DCreate9Ex(D3D9b_SDK_VERSION)? };
+    let d3d9 = unsafe { Direct3DCreate9(D3D9b_SDK_VERSION) };
 
     let mut present_params = D3DPRESENT_PARAMETERS {
         BackBufferWidth: 100,
@@ -228,6 +228,8 @@ fn dll_attach_dx9() -> Result<(), Error> {
         FullScreen_RefreshRateInHz: 0,
         PresentationInterval: 1,
     };
+
+    let d3d9 = d3d9.unwrap();
 
     let mut device = None;
 
@@ -299,43 +301,43 @@ fn new_dx9_present_function(
 ) -> HRESULT {
     let this = unsafe { IDirect3DDevice9::from_raw(this) };
 
-    let rec = unsafe { &*src_rect };
-
-    let width = (rec.right - rec.left) as u32;
-    let height = (rec.bottom - rec.top) as u32;
-
-    let render_target = unsafe { this.GetRenderTarget(0).unwrap() };
+    let back_buffer = unsafe { this.GetBackBuffer(0, 0, D3DBACKBUFFER_TYPE_MONO).unwrap() };
 
     let mut desc = D3DSURFACE_DESC::default();
-    unsafe { render_target.GetDesc(&mut desc).unwrap() };
+    unsafe { back_buffer.GetDesc(&mut desc).unwrap() };
 
-    let mut out_surf = None;
+    let width = desc.Width;
+    let height = desc.Height;
+
+    let mut tex = None;
     unsafe {
-        this.CreateOffscreenPlainSurface(
-            desc.Width,
-            desc.Height,
+        this.CreateTexture(
+            width,
+            height,
+            1,  
+            D3DUSAGE_DYNAMIC as u32,
             desc.Format,
             D3DPOOL_SYSTEMMEM,
-            &mut out_surf,
+            &mut tex,
             null_mut(),
         )
         .unwrap()
     };
 
-    let out_surf = out_surf.unwrap();
+    let tex = tex.unwrap();
 
-    unsafe { this.GetRenderTargetData(&render_target, &out_surf).unwrap() };
+    let out_surf = unsafe { tex.GetSurfaceLevel(0).unwrap() };
+
+    unsafe { this.GetRenderTargetData(&back_buffer, &out_surf).unwrap() };
 
     static ONCE: Once = Once::new();
 
     ONCE.call_once(|| {
-        std::thread::sleep_ms(1000 * 5);
-
         let mut locked_rect = D3DLOCKED_RECT::default();
 
         unsafe {
-            out_surf
-                .LockRect(&mut locked_rect, null(), D3DLOCK_READONLY as u32)
+            tex
+                .LockRect(0, &mut locked_rect, null(), D3DLOCK_READONLY as u32)
                 .unwrap();
         }
 
@@ -360,7 +362,7 @@ fn new_dx9_present_function(
 
         writer.write_image_data(slice).unwrap();
 
-        unsafe { out_surf.UnlockRect().unwrap() }
+        unsafe { tex.UnlockRect(0).unwrap() }
     });
 
     let present_function = TRAMPOLINE

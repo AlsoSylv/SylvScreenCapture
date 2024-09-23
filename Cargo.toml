@@ -17,6 +17,7 @@ egui_extras = "0.28.1"
 
 [dependencies.windows]
 version = "0.58.0"
+default-features = false
 features = [
     "Graphics_DirectX_Direct3D11",
     "Win32_Graphics_Dxgi",
