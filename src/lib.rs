@@ -1,19 +1,23 @@
+use core::slice;
 use interprocess::local_socket::traits::Stream as StreamTrait;
 use interprocess::local_socket::{GenericNamespaced, Stream, ToNsName};
 use retour::RawDetour;
 use std::ffi::c_void;
-use std::io::{ErrorKind, Read, Write};
+use std::fs::File;
+use std::io::{BufWriter, ErrorKind, Read, Write};
+use std::ops::Mul;
 use std::ptr::{null, null_mut};
 use std::sync::atomic::AtomicPtr;
 use std::sync::{Once, OnceLock};
 use windows::Win32::Foundation::{HANDLE, RECT};
 use windows::Win32::Graphics::Direct3D11::{ID3D11Device1, D3D11_TEXTURE2D_DESC};
 use windows::Win32::Graphics::Direct3D9::{
-    D3D9b_SDK_VERSION, Direct3DCreate9, IDirect3DDevice9, IDirect3DDevice9Ex, IDirect3DTexture9,
-    D3DBACKBUFFER_TYPE_MONO, D3DCREATE_HARDWARE_VERTEXPROCESSING, D3DDEVTYPE_HAL, D3DFMT_A8R8G8B8,
-    D3DFMT_UNKNOWN, D3DFMT_X8R8G8B8, D3DMULTISAMPLE_NONE, D3DPOOL_DEFAULT, D3DPOOL_SYSTEMMEM,
-    D3DPRESENTFLAG_DEVICECLIP, D3DPRESENT_PARAMETERS, D3DSWAPEFFECT_COPY, D3DTEXF_NONE,
-    D3DUSAGE_DYNAMIC, D3DUSAGE_RENDERTARGET,
+    D3D9b_SDK_VERSION, Direct3DCreate9, Direct3DCreate9Ex, IDirect3DDevice9, IDirect3DDevice9Ex,
+    IDirect3DSurface9, IDirect3DTexture9, D3DBACKBUFFER_TYPE_MONO,
+    D3DCREATE_HARDWARE_VERTEXPROCESSING, D3DDEVTYPE_HAL, D3DDISPLAYMODEEX, D3DFMT_A8R8G8B8,
+    D3DFMT_UNKNOWN, D3DFMT_X8R8G8B8, D3DLOCKED_RECT, D3DLOCK_READONLY, D3DMULTISAMPLE_NONE,
+    D3DPOOL_DEFAULT, D3DPOOL_SYSTEMMEM, D3DPRESENTFLAG_DEVICECLIP, D3DPRESENT_PARAMETERS,
+    D3DSURFACE_DESC, D3DSWAPEFFECT_COPY, D3DTEXF_NONE, D3DUSAGE_DYNAMIC, D3DUSAGE_RENDERTARGET,
 };
 use windows::Win32::Graphics::Gdi::RGNDATA;
 use windows::Win32::System::SystemServices;
@@ -206,11 +210,7 @@ fn dll_attach_dx9() -> Result<(), Error> {
         )?
     };
 
-    let d3d9 = unsafe { Direct3DCreate9(D3D9b_SDK_VERSION) };
-
-    let Some(d3d9) = d3d9 else {
-        std::process::exit(1);
-    };
+    let d3d9 = unsafe { Direct3DCreate9Ex(D3D9b_SDK_VERSION)? };
 
     let mut present_params = D3DPRESENT_PARAMETERS {
         BackBufferWidth: 100,
@@ -242,9 +242,9 @@ fn dll_attach_dx9() -> Result<(), Error> {
         )?
     };
 
-    let device = device.unwrap();
+    let deviceex = device.unwrap();
 
-    let present = device.vtable().Present;
+    let present = deviceex.vtable().Present;
 
     unsafe {
         DestroyWindow(window)?;
@@ -288,6 +288,86 @@ fn dll_attach_dx9() -> Result<(), Error> {
     SHARED_HANDLE.store(ptr as _, std::sync::atomic::Ordering::Relaxed);
 
     Ok(())
+}
+
+fn new_dx9_present_function(
+    this: *mut c_void,
+    src_rect: *const RECT,
+    dst_rect: *const RECT,
+    window: HWND,
+    rgn: *const RGNDATA,
+) -> HRESULT {
+    let this = unsafe { IDirect3DDevice9::from_raw(this) };
+
+    let rec = unsafe { &*src_rect };
+
+    let width = (rec.right - rec.left) as u32;
+    let height = (rec.bottom - rec.top) as u32;
+
+    let render_target = unsafe { this.GetRenderTarget(0).unwrap() };
+
+    let mut desc = D3DSURFACE_DESC::default();
+    unsafe { render_target.GetDesc(&mut desc).unwrap() };
+
+    let mut out_surf = None;
+    unsafe {
+        this.CreateOffscreenPlainSurface(
+            desc.Width,
+            desc.Height,
+            desc.Format,
+            D3DPOOL_SYSTEMMEM,
+            &mut out_surf,
+            null_mut(),
+        )
+        .unwrap()
+    };
+
+    let out_surf = out_surf.unwrap();
+
+    unsafe { this.GetRenderTargetData(&render_target, &out_surf).unwrap() };
+
+    static ONCE: Once = Once::new();
+
+    ONCE.call_once(|| {
+        std::thread::sleep_ms(1000 * 5);
+
+        let mut locked_rect = D3DLOCKED_RECT::default();
+
+        unsafe {
+            out_surf
+                .LockRect(&mut locked_rect, null(), D3DLOCK_READONLY as u32)
+                .unwrap();
+        }
+
+        println!("{:?}", desc);
+        println!("{width} vs 1920 {height} vs 1080");
+
+        let slice = unsafe {
+            slice::from_raw_parts(
+                locked_rect.pBits as *const u8,
+                (width).mul(height).mul(4) as usize,
+            )
+        };
+
+        let path = File::create(std::env::home_dir().unwrap().join("screenshot.png")).unwrap();
+        let writer = BufWriter::new(path);
+
+        let mut encoder = png::Encoder::new(writer, width, height);
+        encoder.set_color(png::ColorType::Rgba);
+        encoder.set_depth(png::BitDepth::Eight);
+
+        let mut writer = encoder.write_header().unwrap();
+
+        writer.write_image_data(slice).unwrap();
+
+        unsafe { out_surf.UnlockRect().unwrap() }
+    });
+
+    let present_function = TRAMPOLINE
+        .get()
+        .expect("The trampoline was set before this was ever called.");
+
+    unsafe { (present_function.dx9)(this.as_raw(), src_rect, dst_rect, window, rgn) }
 }
 
 fn dll_attach() -> Result<(), Error> {
@@ -419,63 +499,6 @@ fn dll_attach() -> Result<(), Error> {
     SHARED_HANDLE.store(ptr as _, std::sync::atomic::Ordering::Relaxed);
 
     Ok(())
-}
-
-fn new_dx9_present_function(
-    this: *mut c_void,
-    src_rect: *const RECT,
-    dst_rect: *const RECT,
-    window: HWND,
-    rgn: *const RGNDATA,
-) -> HRESULT {
-    let this = unsafe { IDirect3DDevice9Ex::from_raw(this) };
-
-    let shared_ptr = DX9_SHARED_BUFFER.load(std::sync::atomic::Ordering::Relaxed);
-
-    if !shared_ptr.is_null() {
-        println!("You did it!!")
-    //         let surface = unsafe { this.GetBackBuffer(0, 0, D3DBACKBUFFER_TYPE_MONO).unwrap() };
-    //
-    //         let shared_tex = unsafe { IDirect3DTexture9::from_raw(shared_ptr) };
-    //         let shared_surface = unsafe { shared_tex.GetSurfaceLevel(0) }.unwrap();
-    //
-    //         unsafe { this.StretchRect(&surface, null(), &shared_surface, null(), D3DTEXF_NONE).unwrap() };
-    } else {
-        let handle = SHARED_HANDLE.load(std::sync::atomic::Ordering::Relaxed);
-
-        if !handle.is_null() && shared_ptr.is_null() {
-            let mut texture = None;
-
-            let maybe_shared_buffer = unsafe {
-                this.CreateTexture(
-                    1920,
-                    1080,
-                    1,
-                    D3DUSAGE_DYNAMIC as u32,
-                    D3DFMT_A8R8G8B8,
-                    D3DPOOL_SYSTEMMEM,
-                    &mut texture,
-                    &mut HANDLE(handle),
-                )
-            };
-
-            match texture {
-                Some(shared_buffer) => {
-                    DX9_SHARED_BUFFER
-                        .store(shared_buffer.as_raw(), std::sync::atomic::Ordering::Relaxed);
-                }
-                None => {
-                    println!("Error opening shared texture {maybe_shared_buffer:?}")
-                }
-            }
-        }
-    }
-
-    let present_function = TRAMPOLINE
-        .get()
-        .expect("The trampoline was set before this was ever called.");
-
-    unsafe { (present_function.dx9)(this.as_raw(), src_rect, dst_rect, window, rgn) }
 }
 
 fn new_present_function(this: *mut c_void, sync_internal: u32, flags: DXGI_PRESENT) -> HRESULT {
