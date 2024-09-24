@@ -302,83 +302,72 @@ fn new_dx9_present_function(
     let back_buffer = unsafe { this.GetBackBuffer(0, 0, D3DBACKBUFFER_TYPE_MONO).unwrap() };
 
     let mut desc = D3DSURFACE_DESC::default();
+
     unsafe { back_buffer.GetDesc(&mut desc).unwrap() };
 
     let width = desc.Width;
     let height = desc.Height;
 
-    let mut tex = None;
+    let mut out_surf = None;
+
     unsafe {
-        this.CreateTexture(
+        this.CreateOffscreenPlainSurface(
             width,
             height,
-            1,
-            D3DUSAGE_DYNAMIC as u32,
             desc.Format,
             D3DPOOL_SYSTEMMEM,
-            &mut tex,
+            &mut out_surf,
             null_mut(),
         )
         .unwrap()
     };
 
-    let tex = tex.unwrap();
-
-    let out_surf = unsafe { tex.GetSurfaceLevel(0).unwrap() };
+    let out_surf = out_surf.unwrap();
 
     unsafe { this.GetRenderTargetData(&back_buffer, &out_surf).unwrap() };
 
-    static ONCE: Once = Once::new();
+    let mut locked_rect = D3DLOCKED_RECT::default();
+    let read_only = D3DLOCK_READONLY as u32;
 
-    ONCE.call_once(|| {
-        let mut locked_rect = D3DLOCKED_RECT::default();
+    unsafe {
+        out_surf
+            .LockRect(&mut locked_rect, null(), read_only)
+            .unwrap();
+    }
 
-        unsafe {
-            tex.LockRect(0, &mut locked_rect, null(), D3DLOCK_READONLY as u32)
-                .unwrap();
-        }
+    let step_by = locked_rect.Pitch as usize * height as usize;
 
-        let path = File::create(std::env::home_dir().unwrap().join("screenshot.png")).unwrap();
-        let writer = BufWriter::new(path);
+    let slice = unsafe {
+        slice::from_raw_parts_mut(locked_rect.pBits.cast::<u8>(), step_by * width as usize * 4)
+    };
 
-        let mut encoder = png::Encoder::new(writer, width, height);
-        encoder.set_color(png::ColorType::Rgba);
-        encoder.set_depth(png::BitDepth::Eight);
+    for y in 0..desc.Height as usize {
+        let location = locked_rect.Pitch as usize * y;
 
-        let mut writer = encoder.write_header().unwrap();
+        // TODO: Write this slice to shared memory
+        let slice = &mut slice[location..(location + width as usize * 4)];
 
-        let mut vec = Vec::with_capacity((width * height * 4) as usize);
+        // TODO: Move this to the parent process
+        // Simple way to encode the BGRA chunk to RGBA
+        slice.chunks_mut(4).for_each(|slice| {
+            assert!(slice.len() == 4);
+            slice.swap(0, 2);
+            slice[3] = 255;
+        });
+    }
 
-        for y in 0..desc.Height as usize {
-            let pixels = locked_rect.pBits as *mut u8;
-            let pixels = unsafe { pixels.add(locked_rect.Pitch as usize * y) };
+    unsafe { out_surf.UnlockRect().unwrap() }
 
-            let slice = unsafe { slice::from_raw_parts_mut(pixels, width.mul(4) as usize) };
-
-            slice.chunks_mut(4).for_each(|slice| {
-                let slice: &mut [u8; 4] = slice.try_into().unwrap();
-                let [b, g, r, _] = *slice;
-
-                *slice = [r, g, b, 255];
-            });
-
-            println!("{:?}", &slice[0..4]);
-
-            vec.extend_from_slice(slice);
-        }
-
-        writer.write_image_data(&vec).unwrap();
-
-        writer.finish().unwrap();
-
-        unsafe { tex.UnlockRect(0).unwrap() }
-    });
-
-    let present_function = TRAMPOLINE
+    let present_fn_union = TRAMPOLINE
         .get()
         .expect("The trampoline was set before this was ever called.");
 
-    unsafe { (present_function.dx9)(this.as_raw(), src_rect, dst_rect, window, rgn) }
+    // SAFETY: This is set when the app is running in DX9
+    // so because we're already here we know that the present function has to be DX9
+    let present_function = unsafe { present_fn_union.dx9 };
+
+    // SAFETY: This is the original present function to be called
+    unsafe { (present_function)(this.as_raw(), src_rect, dst_rect, window, rgn) }
 }
 
 fn dll_attach() -> Result<(), Error> {
