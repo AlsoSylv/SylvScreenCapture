@@ -12,12 +12,10 @@ use std::sync::{Once, OnceLock};
 use windows::Win32::Foundation::{HANDLE, RECT};
 use windows::Win32::Graphics::Direct3D11::{ID3D11Device1, D3D11_TEXTURE2D_DESC};
 use windows::Win32::Graphics::Direct3D9::{
-    D3D9b_SDK_VERSION, Direct3DCreate9, Direct3DCreate9Ex, IDirect3DDevice9, IDirect3DDevice9Ex,
-    IDirect3DSurface9, IDirect3DTexture9, D3DBACKBUFFER_TYPE_MONO,
-    D3DCREATE_HARDWARE_VERTEXPROCESSING, D3DDEVTYPE_HAL, D3DDISPLAYMODEEX, D3DFMT_A8R8G8B8,
-    D3DFMT_UNKNOWN, D3DFMT_X8R8G8B8, D3DLOCKED_RECT, D3DLOCK_READONLY, D3DMULTISAMPLE_NONE,
-    D3DPOOL_DEFAULT, D3DPOOL_SYSTEMMEM, D3DPRESENTFLAG_DEVICECLIP, D3DPRESENT_PARAMETERS,
-    D3DSURFACE_DESC, D3DSWAPEFFECT_COPY, D3DTEXF_NONE, D3DUSAGE_DYNAMIC, D3DUSAGE_RENDERTARGET,
+    D3D9b_SDK_VERSION, Direct3DCreate9, IDirect3DDevice9, D3DBACKBUFFER_TYPE_MONO,
+    D3DCREATE_HARDWARE_VERTEXPROCESSING, D3DDEVTYPE_HAL, D3DFMT_UNKNOWN, D3DLOCKED_RECT,
+    D3DLOCK_READONLY, D3DMULTISAMPLE_NONE, D3DPOOL_SYSTEMMEM, D3DPRESENTFLAG_DEVICECLIP,
+    D3DPRESENT_PARAMETERS, D3DSURFACE_DESC, D3DSWAPEFFECT_COPY, D3DUSAGE_DYNAMIC,
 };
 use windows::Win32::Graphics::Gdi::RGNDATA;
 use windows::Win32::System::SystemServices;
@@ -314,7 +312,7 @@ fn new_dx9_present_function(
         this.CreateTexture(
             width,
             height,
-            1,  
+            1,
             D3DUSAGE_DYNAMIC as u32,
             desc.Format,
             D3DPOOL_SYSTEMMEM,
@@ -336,20 +334,9 @@ fn new_dx9_present_function(
         let mut locked_rect = D3DLOCKED_RECT::default();
 
         unsafe {
-            tex
-                .LockRect(0, &mut locked_rect, null(), D3DLOCK_READONLY as u32)
+            tex.LockRect(0, &mut locked_rect, null(), D3DLOCK_READONLY as u32)
                 .unwrap();
         }
-
-        println!("{:?}", desc);
-        println!("{width} vs 1920 {height} vs 1080");
-
-        let slice = unsafe {
-            slice::from_raw_parts(
-                locked_rect.pBits as *const u8,
-                (width).mul(height).mul(4) as usize,
-            )
-        };
 
         let path = File::create(std::env::home_dir().unwrap().join("screenshot.png")).unwrap();
         let writer = BufWriter::new(path);
@@ -360,7 +347,29 @@ fn new_dx9_present_function(
 
         let mut writer = encoder.write_header().unwrap();
 
-        writer.write_image_data(slice).unwrap();
+        let mut vec = Vec::with_capacity((width * height * 4) as usize);
+
+        for y in 0..desc.Height as usize {
+            let pixels = locked_rect.pBits as *mut u8;
+            let pixels = unsafe { pixels.add(locked_rect.Pitch as usize * y) };
+
+            let slice = unsafe { slice::from_raw_parts_mut(pixels, width.mul(4) as usize) };
+
+            slice.chunks_mut(4).for_each(|slice| {
+                let slice: &mut [u8; 4] = slice.try_into().unwrap();
+                let [b, g, r, _] = *slice;
+
+                *slice = [r, g, b, 255];
+            });
+
+            println!("{:?}", &slice[0..4]);
+
+            vec.extend_from_slice(slice);
+        }
+
+        writer.write_image_data(&vec).unwrap();
+
+        writer.finish().unwrap();
 
         unsafe { tex.UnlockRect(0).unwrap() }
     });
