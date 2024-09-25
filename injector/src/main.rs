@@ -1,13 +1,9 @@
-//! TODO: Setup IPC
-//!
-
 use egui::{Color32, ColorImage, Frame, Image, TextureOptions};
 use interprocess::local_socket::{GenericNamespaced, ListenerOptions, ToNsName};
 use std::env;
 use std::ffi::CString;
 use std::io::{Read, Write};
 use std::sync::Arc;
-use std::time::Duration;
 use sysinfo::{ProcessRefreshKind, RefreshKind, System};
 use windows::core::{s, Interface, PCSTR};
 use windows::Win32::Foundation::{DuplicateHandle, DUPLICATE_HANDLE_OPTIONS, HANDLE};
@@ -154,8 +150,6 @@ fn main() {
     let mut listener = opts.create_sync().unwrap();
 
     let shared_handle = inject(&process_name, maybe_handle).expect("AAA");
-
-    std::thread::sleep(Duration::from_secs(2));
 
     let mut texture_handle = egui_ctx.load_texture(
         "RawDXOut",
@@ -335,7 +329,7 @@ fn inject(process_name: &str, original_shared_handle: HANDLE) -> Result<HANDLE, 
 
         let mut dll_path = env::current_exe().unwrap();
         dll_path.pop();
-        dll_path.push("screenshot_frame.dll");
+        dll_path.push("screen_recorder.dll");
 
         let dll_name_str = dll_path.to_str().unwrap();
         let dll_path = CString::new(dll_path.to_str().unwrap()).unwrap();
