@@ -9,9 +9,8 @@ use windows::core::{s, Interface, PCSTR};
 use windows::Win32::Foundation::{DuplicateHandle, DUPLICATE_HANDLE_OPTIONS, HANDLE};
 use windows::Win32::Graphics::Direct3D11::{
     ID3D11Texture2D, D3D11_BIND_RENDER_TARGET, D3D11_BIND_SHADER_RESOURCE, D3D11_CPU_ACCESS_READ,
-    D3D11_MAPPED_SUBRESOURCE, D3D11_MAP_READ, D3D11_RESOURCE_MISC_SHARED,
-    D3D11_RESOURCE_MISC_SHARED_NTHANDLE, D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT,
-    D3D11_USAGE_STAGING,
+    D3D11_RESOURCE_MISC_SHARED, D3D11_RESOURCE_MISC_SHARED_NTHANDLE, D3D11_TEXTURE2D_DESC,
+    D3D11_USAGE_DEFAULT, D3D11_USAGE_STAGING,
 };
 use windows::Win32::Graphics::Dxgi::Common::{
     DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_FORMAT_UNKNOWN, DXGI_SAMPLE_DESC,
@@ -151,6 +150,12 @@ fn main() {
 
     let shared_handle = inject(&process_name, maybe_handle).expect("AAA");
 
+    let shared_mem = shared_memory::ShmemConf::new()
+        .os_id("SylvScreenShare")
+        .size(size_of::<u32>() * 2 + size_of::<u32>() * 1920 * 1080)
+        .create()
+        .unwrap();
+
     let mut texture_handle = egui_ctx.load_texture(
         "RawDXOut",
         Arc::new(ColorImage::default()),
@@ -208,31 +213,14 @@ fn main() {
 
                                 unsafe { context.CopyResource(&new_texture, &texture) };
 
-                                let mut mapped_surface = D3D11_MAPPED_SUBRESOURCE::default();
-
-                                if let Err(e) = unsafe {
-                                    context.Map(
-                                        &new_texture,
-                                        0,
-                                        D3D11_MAP_READ,
-                                        0,
-                                        Some(&mut mapped_surface),
-                                    )
-                                } {
-                                    println!("Error reading mapped surface: {e}");
-                                    return;
-                                };
-
                                 let slice = unsafe {
                                     std::slice::from_raw_parts(
-                                        mapped_surface.pData as *const u8,
-                                        description.Width as usize
-                                            * description.Height as usize
-                                            * 4,
+                                        shared_mem.as_ptr().add(8) as *const u8,
+                                        1600 as usize * 900 as usize * 4,
                                     )
                                 };
 
-                                let image = ColorImage::from_rgba_unmultiplied([1920, 1080], slice);
+                                let image = ColorImage::from_rgba_unmultiplied([1600, 900], slice);
 
                                 texture_handle.set(image, TextureOptions::default());
 

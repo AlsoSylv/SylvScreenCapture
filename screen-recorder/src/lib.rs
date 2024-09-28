@@ -277,14 +277,30 @@ fn dll_attach_dx9() -> Result<(), Error> {
         }
     };
 
-    stream.write(&std::process::id().to_le_bytes()).unwrap();
+    stream.write_all(&std::process::id().to_le_bytes()).unwrap();
     let mut handle = [0; 8];
     stream.read_exact(&mut handle).unwrap();
     let ptr = isize::from_le_bytes(handle);
     SHARED_HANDLE.store(ptr as _, std::sync::atomic::Ordering::Relaxed);
 
+    let shared_buffer = shared_memory::ShmemConf::new()
+        .os_id("SylvScreenShare")
+        .size(size_of::<u32>() * 2 + size_of::<u32>() * 1920 * 1080)
+        .open()
+        .unwrap();
+
+    SHARED_CPU_BUFFER.get_or_init(|| SharedMem(shared_buffer));
+
     Ok(())
 }
+
+#[repr(transparent)]
+struct SharedMem(shared_memory::Shmem);
+
+unsafe impl Send for SharedMem {}
+unsafe impl Sync for SharedMem {}
+
+static SHARED_CPU_BUFFER: OnceLock<SharedMem> = OnceLock::new();
 
 fn new_dx9_present_function(
     this: *mut c_void,
@@ -295,64 +311,79 @@ fn new_dx9_present_function(
 ) -> HRESULT {
     let this = unsafe { IDirect3DDevice9::from_raw(this) };
 
-    let back_buffer = unsafe { this.GetBackBuffer(0, 0, D3DBACKBUFFER_TYPE_MONO).unwrap() };
+    if let Some(buffer) = SHARED_CPU_BUFFER.get() {
+        let buffer_ptr = buffer.0.as_ptr();
 
-    let mut desc = D3DSURFACE_DESC::default();
+        let back_buffer = unsafe { this.GetBackBuffer(0, 0, D3DBACKBUFFER_TYPE_MONO).unwrap() };
 
-    unsafe { back_buffer.GetDesc(&mut desc).unwrap() };
+        let mut desc = D3DSURFACE_DESC::default();
 
-    let width = desc.Width;
-    let height = desc.Height;
+        unsafe { back_buffer.GetDesc(&mut desc).unwrap() };
 
-    let mut out_surf = None;
+        let width = desc.Width;
+        let height = desc.Height;
 
-    unsafe {
-        this.CreateOffscreenPlainSurface(
-            width,
-            height,
-            desc.Format,
-            D3DPOOL_SYSTEMMEM,
-            &mut out_surf,
-            null_mut(),
-        )
-        .unwrap()
-    };
+        let mut out_surf = None;
 
-    let out_surf = out_surf.unwrap();
+        unsafe {
+            this.CreateOffscreenPlainSurface(
+                width,
+                height,
+                desc.Format,
+                D3DPOOL_SYSTEMMEM,
+                &mut out_surf,
+                null_mut(),
+            )
+            .unwrap()
+        };
 
-    unsafe { this.GetRenderTargetData(&back_buffer, &out_surf).unwrap() };
+        let out_surf = out_surf.unwrap();
 
-    let mut locked_rect = D3DLOCKED_RECT::default();
-    let read_only = D3DLOCK_READONLY as u32;
+        unsafe { this.GetRenderTargetData(&back_buffer, &out_surf).unwrap() };
 
-    unsafe {
-        out_surf
-            .LockRect(&mut locked_rect, null(), read_only)
-            .unwrap();
+        let mut locked_rect = D3DLOCKED_RECT::default();
+        let read_only = D3DLOCK_READONLY as u32;
+
+        unsafe {
+            out_surf
+                .LockRect(&mut locked_rect, null(), read_only)
+                .unwrap();
+        }
+
+        let step_by = locked_rect.Pitch as usize * height as usize;
+
+        let slice = unsafe {
+            slice::from_raw_parts_mut(locked_rect.pBits.cast::<u8>(), step_by * width as usize * 4)
+        };
+
+        let width_bytes = width.to_le_bytes();
+        let height_bytes = height.to_le_bytes();
+        unsafe {
+            buffer_ptr.copy_from(width_bytes.as_ptr(), 4);
+        }
+        unsafe {
+            buffer_ptr.add(4).copy_from(height_bytes.as_ptr(), 4);
+        }
+
+        for y in 0..desc.Height as usize {
+            let location = locked_rect.Pitch as usize * y;
+            let slice = &mut slice[location..(location + width as usize * 4)];
+
+            // TODO: Move this to the parent process?
+            // Simple way to encode the BGRA chunk to RGBA
+            slice.chunks_mut(4).for_each(|slice| {
+                assert!(slice.len() == 4);
+                slice.swap(0, 2);
+                slice[3] = 255;
+            });
+
+            let buffer_ptr =
+                unsafe { buffer_ptr.add(size_of::<u32>() * 2 + 4 * y * width as usize) };
+            unsafe { buffer_ptr.copy_from(slice.as_ptr(), slice.len()) };
+        }
+
+        unsafe { out_surf.UnlockRect().unwrap() }
     }
-
-    let step_by = locked_rect.Pitch as usize * height as usize;
-
-    let slice = unsafe {
-        slice::from_raw_parts_mut(locked_rect.pBits.cast::<u8>(), step_by * width as usize * 4)
-    };
-
-    for y in 0..desc.Height as usize {
-        let location = locked_rect.Pitch as usize * y;
-
-        // TODO: Write this slice to shared memory
-        let slice = &mut slice[location..(location + width as usize * 4)];
-
-        // TODO: Move this to the parent process
-        // Simple way to encode the BGRA chunk to RGBA
-        slice.chunks_mut(4).for_each(|slice| {
-            assert!(slice.len() == 4);
-            slice.swap(0, 2);
-            slice[3] = 255;
-        });
-    }
-
-    unsafe { out_surf.UnlockRect().unwrap() }
 
     let present_fn_union = TRAMPOLINE
         .get()
@@ -488,7 +519,7 @@ fn dll_attach() -> Result<(), Error> {
         }
     };
 
-    stream.write(&std::process::id().to_le_bytes()).unwrap();
+    stream.write_all(&std::process::id().to_le_bytes()).unwrap();
     let mut handle = [0; 8];
     stream.read_exact(&mut handle).unwrap();
     let ptr = isize::from_le_bytes(handle);

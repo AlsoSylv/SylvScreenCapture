@@ -7,7 +7,7 @@ use windows::Win32::Graphics::Direct3D11::{
     D3D11_SDK_VERSION,
 };
 use windows::Win32::Graphics::Dxgi::Common::{
-    DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_MODE_DESC, DXGI_MODE_SCALING_UNSPECIFIED,
+    DXGI_FORMAT_R8G8B8A8_UNORM_SRGB, DXGI_MODE_DESC, DXGI_MODE_SCALING_UNSPECIFIED,
     DXGI_MODE_SCANLINE_ORDER_UNSPECIFIED, DXGI_RATIONAL, DXGI_SAMPLE_DESC,
 };
 use windows::Win32::Graphics::Dxgi::{
@@ -32,7 +32,7 @@ pub fn create_device_and_swap_chain(
                 Numerator: 60,
                 Denominator: 1,
             },
-            Format: DXGI_FORMAT_R8G8B8A8_UNORM,
+            Format: DXGI_FORMAT_R8G8B8A8_UNORM_SRGB,
             ScanlineOrdering: DXGI_MODE_SCANLINE_ORDER_UNSPECIFIED,
             Scaling: DXGI_MODE_SCALING_UNSPECIFIED,
         },

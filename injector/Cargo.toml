@@ -11,5 +11,6 @@ egui = "0.28.1"
 egui-winit = "0.28.1"
 egui_demo_lib = "0.28.1"
 egui_extras = "0.28.1"
+shared_memory.workspace = true
 windows.workspace = true
 interprocess.workspace = true

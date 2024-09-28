@@ -1,9 +1,10 @@
 [workspace]
 members = ["injector", "screen-recorder"]
-
+resolver = "2"
 
 [workspace.dependencies]
 interprocess = "2.2.1"
+shared_memory = "0.12.4"
 
 [workspace.dependencies.windows]
 version = "0.58.0"
