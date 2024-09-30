@@ -1,11 +1,12 @@
 use egui::{Color32, ColorImage, Frame, Image, TextureOptions};
 use interprocess::local_socket::{GenericNamespaced, ListenerOptions, ToNsName};
 use std::env;
-use std::ffi::CString;
 use std::io::{Read, Write};
+use std::os::windows::ffi::OsStrExt;
+use std::ptr::null_mut;
 use std::sync::Arc;
 use sysinfo::{ProcessRefreshKind, RefreshKind, System};
-use windows::core::{s, Interface, PCSTR};
+use windows::core::{s, w, Interface, PCSTR};
 use windows::Win32::Foundation::{DuplicateHandle, DUPLICATE_HANDLE_OPTIONS, HANDLE};
 use windows::Win32::Graphics::Direct3D11::{
     ID3D11Texture2D, D3D11_BIND_RENDER_TARGET, D3D11_BIND_SHADER_RESOURCE, D3D11_CPU_ACCESS_READ,
@@ -20,16 +21,14 @@ use windows::Win32::Graphics::Dxgi::{
     DXGI_SWAP_CHAIN_FLAG,
 };
 use windows::Win32::System::Diagnostics::Debug::WriteProcessMemory;
-use windows::Win32::System::LibraryLoader::{GetModuleHandleA, GetProcAddress};
+use windows::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
 use windows::Win32::System::Memory::{VirtualAllocEx, MEM_COMMIT, MEM_RESERVE, PAGE_READWRITE};
-use windows::Win32::System::Threading::{
-    CreateRemoteThread, OpenProcess, PROCESS_CREATE_THREAD, PROCESS_DUP_HANDLE,
-    PROCESS_QUERY_INFORMATION, PROCESS_VM_OPERATION, PROCESS_VM_READ, PROCESS_VM_WRITE,
-};
+use windows::Win32::System::Threading::CreateRemoteThread;
 use winit::dpi::PhysicalSize;
 use winit::event::{Event, WindowEvent};
 use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
 mod dx11;
+mod process_ext;
 
 fn main() {
     let event_loop = winit::event_loop::EventLoop::new().unwrap();
@@ -153,7 +152,7 @@ fn main() {
     let shared_mem = shared_memory::ShmemConf::new()
         .os_id("SylvScreenShare")
         .size(size_of::<u32>() * 2 + size_of::<u32>() * 1920 * 1080)
-        .create()
+        .open()
         .unwrap();
 
     let mut texture_handle = egui_ctx.load_texture(
@@ -272,74 +271,75 @@ fn main() {
 }
 
 fn inject(process_name: &str, original_shared_handle: HANDLE) -> Result<HANDLE, ()> {
-    const KERNEL_32_DLL: PCSTR = s!("kernel32.dll");
-    const LOAD_LIBRARY_A_C: PCSTR = s!("LoadLibraryA");
+    const KERNEL_32_DLL: windows::core::PCWSTR = w!("kernel32.dll");
+    const LOAD_LIBRARY_A_C: PCSTR = s!("LoadLibraryW");
+    const SHARED_RIGHTS: u32 = DXGI_SHARED_RESOURCE_READ.0 | DXGI_SHARED_RESOURCE_WRITE.0;
 
     let system =
         System::new_with_specifics(RefreshKind::new().with_processes(ProcessRefreshKind::new()));
-    let process = system
-        .processes_by_name(process_name.as_ref())
-        .next()
-        .unwrap();
 
-    let pid = process.pid().as_u32();
-
-    let process_attach_rights = PROCESS_CREATE_THREAD
-        | PROCESS_QUERY_INFORMATION
-        | PROCESS_VM_OPERATION
-        | PROCESS_VM_READ
-        | PROCESS_VM_WRITE
-        | PROCESS_DUP_HANDLE;
+    let process = process_ext::Process::new_with_system(process_name, &system);
+    if let Ok(slice) = process.get_modules() {
+        slice.iter().for_each(|st| println!("{st:?}"));
+    }
 
     let mut shared_handle = HANDLE::default();
+    let current_process = process_ext::Process::current_process();
 
     unsafe {
-        let process_handle = OpenProcess(process_attach_rights, false, pid).unwrap();
-        let source_process = OpenProcess(process_attach_rights, false, std::process::id()).unwrap();
-
         DuplicateHandle(
-            source_process,
+            current_process.handle,
             original_shared_handle,
-            process_handle,
+            process.handle,
             &mut shared_handle,
-            DXGI_SHARED_RESOURCE_READ.0 | DXGI_SHARED_RESOURCE_WRITE.0,
+            SHARED_RIGHTS,
             false,
             DUPLICATE_HANDLE_OPTIONS::default(),
         )
         .unwrap();
+    }
 
-        if process_handle.0.is_null() {
-            return Err(());
-        }
+    assert_ne!(process.handle.0, null_mut());
 
-        let module = GetModuleHandleA(KERNEL_32_DLL).unwrap();
-        let load_library_ptr = GetProcAddress(module, LOAD_LIBRARY_A_C).unwrap();
+    let module = unsafe { GetModuleHandleW(KERNEL_32_DLL) }.unwrap();
+    let load_library_ptr = unsafe { GetProcAddress(module, LOAD_LIBRARY_A_C) }.unwrap();
 
-        let mut dll_path = env::current_exe().unwrap();
-        dll_path.pop();
-        dll_path.push("screen_recorder.dll");
+    let mut dll_path = env::current_exe().unwrap();
+    dll_path.pop();
+    dll_path.push("screen_recorder.dll");
 
-        let dll_name_str = dll_path.to_str().unwrap();
-        let dll_path = CString::new(dll_path.to_str().unwrap()).unwrap();
+    let dll_path = dll_path.as_os_str();
+    let utf_16 = {
+        let mut path: Vec<u16> = dll_path.encode_wide().collect();
+        path.push(0x0);
+        path
+    };
+    let alloc_size = utf_16.len() * size_of::<u16>();
 
-        let virtual_alloc = VirtualAllocEx(
-            process_handle,
+    let virtual_alloc = unsafe {
+        VirtualAllocEx(
+            process.handle,
             None,
-            dll_name_str.len() + 1,
+            alloc_size,
             MEM_COMMIT | MEM_RESERVE,
             PAGE_READWRITE,
-        );
+        )
+    };
 
+    unsafe {
         WriteProcessMemory(
-            process_handle,
+            process.handle,
             virtual_alloc,
-            dll_path.as_ptr().cast(),
-            dll_name_str.len() + 1,
+            utf_16.as_ptr() as _,
+            alloc_size,
             None,
         )
         .unwrap();
+    }
+
+    unsafe {
         CreateRemoteThread(
-            process_handle,
+            process.handle,
             None,
             0,
             Some(std::mem::transmute(load_library_ptr)),

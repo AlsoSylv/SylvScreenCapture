@@ -135,6 +135,7 @@ pub extern "stdcall" fn dll_main(hinst_dll: HINSTANCE, fdw_reason: u32, _: *mut 
 
 fn main(hinst_dll: HINSTANCE, reason: Reason) -> Result<(), Error> {
     if reason == Reason::DllProcessAttach {
+        #[cfg(debug_assertions)]
         unsafe {
             AllocConsole()?;
         }
@@ -365,6 +366,7 @@ fn new_dx9_present_function(
             buffer_ptr.add(4).copy_from(height_bytes.as_ptr(), 4);
         }
 
+        let buffer_ptr = unsafe { buffer_ptr.add(size_of::<u32>() * 2) };
         for y in 0..desc.Height as usize {
             let location = locked_rect.Pitch as usize * y;
             let slice = &mut slice[location..(location + width as usize * 4)];
@@ -377,8 +379,7 @@ fn new_dx9_present_function(
                 slice[3] = 255;
             });
 
-            let buffer_ptr =
-                unsafe { buffer_ptr.add(size_of::<u32>() * 2 + 4 * y * width as usize) };
+            let buffer_ptr = unsafe { buffer_ptr.add(4 * y * width as usize) };
             unsafe { buffer_ptr.copy_from(slice.as_ptr(), slice.len()) };
         }
 
