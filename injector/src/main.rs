@@ -266,6 +266,8 @@ fn main() {
                                         Image::from_texture(&texture_handle).shrink_to_fit();
                                     ui.add(image);
                                 });
+
+                                unsafe { context.Unmap(&new_texture, 0) };
                             });
 
                             let (render_output, platform_output, _) =
