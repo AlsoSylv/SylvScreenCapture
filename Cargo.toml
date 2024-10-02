@@ -1,10 +1,11 @@
 [workspace]
-members = ["injector", "screen-recorder"]
+members = ["injector", "screen-recorder", "glad-gl"]
 resolver = "2"
 
 [workspace.dependencies]
 interprocess = "2.2.1"
 shared_memory = "0.12.4"
+glad-gl = { path = "./glad-gl" }
 
 [workspace.dependencies.windows]
 version = "0.58.0"

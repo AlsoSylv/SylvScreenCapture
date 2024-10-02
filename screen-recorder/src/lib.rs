@@ -1,11 +1,10 @@
 use core::slice;
-use std::mem::transmute;
 use interprocess::local_socket::traits::Stream as StreamTrait;
 use interprocess::local_socket::{GenericNamespaced, Stream, ToNsName};
 use retour::RawDetour;
-use windows::Win32::Graphics::OpenGL::wglGetProcAddress;
-use std::ffi::c_void;
+use std::ffi::{c_void, CStr, CString};
 use std::io::{ErrorKind, Read, Write};
+use std::mem::transmute;
 use std::ptr::{null, null_mut};
 use std::sync::atomic::AtomicPtr;
 use std::sync::{Once, OnceLock};
@@ -17,7 +16,12 @@ use windows::Win32::Graphics::Direct3D9::{
     D3DLOCK_READONLY, D3DMULTISAMPLE_NONE, D3DPOOL_SYSTEMMEM, D3DPRESENTFLAG_DEVICECLIP,
     D3DPRESENT_PARAMETERS, D3DSURFACE_DESC, D3DSWAPEFFECT_COPY,
 };
-use windows::Win32::Graphics::Gdi::{HDC, RGNDATA};
+use windows::Win32::Graphics::Gdi::{GetDC, HDC, RGNDATA};
+use windows::Win32::Graphics::OpenGL::{
+    wglCreateContext, wglDeleteContext, wglGetProcAddress, wglMakeCurrent, ChoosePixelFormat,
+    SetPixelFormat, HGLRC, PFD_DOUBLEBUFFER, PFD_DRAW_TO_WINDOW, PFD_MAIN_PLANE,
+    PFD_SUPPORT_OPENGL, PFD_TYPE_RGBA, PIXELFORMATDESCRIPTOR,
+};
 use windows::Win32::System::LibraryLoader::GetProcAddress;
 use windows::Win32::System::SystemServices;
 use windows::{
@@ -140,23 +144,89 @@ unsafe extern "system" fn def_window_pro_a(
 }
 
 fn dll_attach_ogl() -> Result<(), Error> {
+    use glad_gl::gl;
+
     const OGL_DLL: PCSTR = s!("opengl32.dll");
     const SWAP: PCSTR = s!("wglSwapBuffers");
 
-    println!("Looking for module...");
+    const WINDOW_CLASS_NAME: PCSTR = s!("dummy_window_for_swap_chain");
+
+    let window_class = WNDCLASSEXA {
+        cbSize: size_of::<WNDCLASSEXA>() as u32,
+        style: CS_HREDRAW | CS_VREDRAW,
+        lpfnWndProc: Some(def_window_pro_a),
+        hInstance: unsafe { GetModuleHandleA(None).unwrap().into() },
+        lpszClassName: WINDOW_CLASS_NAME,
+        cbClsExtra: 0,
+        cbWndExtra: 0,
+        hIcon: HICON::default(),
+        hCursor: HCURSOR::default(),
+        hIconSm: HICON::default(),
+        hbrBackground: HBRUSH::default(),
+        lpszMenuName: PCSTR::null(),
+    };
+
+    let registered_window_class = unsafe { RegisterClassExA(&window_class) };
+
+    if registered_window_class == 0 {
+        Err(windows::core::Error::from_win32())?
+    }
+
+    let window = unsafe {
+        CreateWindowExA(
+            WINDOW_EX_STYLE::default(),
+            WINDOW_CLASS_NAME,
+            WINDOW_CLASS_NAME,
+            WS_OVERLAPPEDWINDOW,
+            0,
+            0,
+            100,
+            100,
+            None,
+            None,
+            window_class.hInstance,
+            None,
+        )?
+    };
+
+    let dc = unsafe { GetDC(window) };
+
+    let pixel_format = {
+        let mut pixel_format = PIXELFORMATDESCRIPTOR::default();
+        pixel_format.nSize = size_of::<PIXELFORMATDESCRIPTOR>() as u16;
+        pixel_format.nVersion = 1;
+        pixel_format.dwFlags = PFD_DRAW_TO_WINDOW | PFD_SUPPORT_OPENGL | PFD_DOUBLEBUFFER;
+        pixel_format.iPixelType = PFD_TYPE_RGBA;
+        pixel_format.cDepthBits = 24;
+        pixel_format.cStencilBits = 8;
+        pixel_format.iLayerType = PFD_MAIN_PLANE.0 as u8;
+        pixel_format
+    };
+
+    let pixel_format_idx = unsafe { ChoosePixelFormat(dc, &pixel_format) };
+
+    unsafe { SetPixelFormat(dc, pixel_format_idx, &pixel_format)? };
+
+    let context = unsafe { wglCreateContext(dc)? };
+
+    unsafe { wglMakeCurrent(dc, context)? };
 
     let module = unsafe { GetModuleHandleA(OGL_DLL)? };
 
-    println!("Module found");
+    gl::load(|func_ptr| {
+        let c_string = CString::new(func_ptr).unwrap();
+        let cstr = PCSTR::from_raw(c_string.as_ptr() as _);
 
-    println!("Looking for function...");
+        let func_ptr = unsafe { wglGetProcAddress(cstr) };
+
+        if let Some(func_ptr) = func_ptr {
+            func_ptr as _
+        } else {
+            unsafe { GetProcAddress(module, cstr).map_or_else(|| null(), |func| func as _) }
+        }
+    });
 
     let func = unsafe { GetProcAddress(module, SWAP).unwrap() };
-
-    println!("Function found");
-
-    println!("Trying to reroute...");
-
     let detour = unsafe { RawDetour::new(func as _, new_wgl_swap_buffers as _)? };
 
     unsafe { detour.enable()? };
@@ -193,56 +263,52 @@ fn dll_attach_ogl() -> Result<(), Error> {
     let mut handle = [0; 8];
     stream.read_exact(&mut handle).unwrap();
     let ptr = isize::from_le_bytes(handle);
+    SHARED_HANDLE.store(ptr as _, std::sync::atomic::Ordering::Relaxed);
 
-    let mut memory_object = 0;
+    let create_memory_object = gl::CreateMemoryObjectsEXT as isize;
 
-    const GL_CREATE_MEMORY_OBJECTS: PCSTR = s!("glCreateMemoryObjectsEXT");
-
-    let wglGetProcAddress: unsafe extern "system" fn(PCSTR) -> Option<unsafe extern "system" fn() -> isize> = unsafe { transmute(GetProcAddress(module, s!("wglGetProcAddress"))) };
-
-    let mut create_memory_object = unsafe { wglGetProcAddress(GL_CREATE_MEMORY_OBJECTS) }; 
-
-    println!("{}", windows::core::Error::from_win32());
-
-    if create_memory_object.is_none() {
-        create_memory_object = unsafe { GetProcAddress(module, GL_CREATE_MEMORY_OBJECTS) };
-
-        println!("{}", windows::core::Error::from_win32());
-    }
-    
-    if create_memory_object.is_none() {
-        panic!()
+    unsafe {
+        wglMakeCurrent(dc, HGLRC::default())?;
+        wglDeleteContext(context)?;
+        DestroyWindow(window)?;
+        UnregisterClassA(WINDOW_CLASS_NAME, window_class.hInstance)?;
     }
 
-    type CreateMemoryObjectsEXT = unsafe extern "C" fn(n: isize, memoryObject: *mut u32);
-    let func = gl_loader::get_proc_address("glCreateMemoryObjectsEXT");
-    assert_ne!(func, null());
-    let CreateMemoryObjectsEXT: CreateMemoryObjectsEXT = unsafe { transmute(GetProcAddress(module, s!("CreateMemoryObjectsEXT")).unwrap()) };
-
-    type ImportMemoryWin32HandleEXT = unsafe extern "C" fn(memory: u32, size: u64, handleType: i32, handle: *mut c_void);
-    let ImportMemoryWin32HandleEXT: ImportMemoryWin32HandleEXT = unsafe { transmute(GetProcAddress(module, s!("ImportMemoryWin32HandleEXT")).unwrap()) };
-
-    unsafe { CreateMemoryObjectsEXT(1, &mut memory_object); }
-
-    unsafe { ImportMemoryWin32HandleEXT(memory_object, 1920 * 1080 * 4, 0x958B, ptr as _); }
-
-    println!("{memory_object}");
+    println!("{create_memory_object:?}");
 
     Ok(())
 }
 
 type WglSwapBuffers = unsafe extern "system" fn(HDC) -> BOOL;
 
-extern "C" {
-    // fn CreateMemoryObjectsEXT(n: isize, memoryObject: *mut u32);
-
-    // fn ImportMemoryWin32HandleEXT(memory: u32, size: u64, handleType: i32, handle: *mut c_void);
-}
-
 unsafe extern "system" fn new_wgl_swap_buffers(un_named_1: HDC) -> BOOL {
-    static ONCE: Once = Once::new();
+    use glad_gl::gl;
 
-    ONCE.call_once(|| println!("Called once"));
+    let mut memory_object = 0;
+    let mut texture = 0;
+
+    let handle = SHARED_HANDLE.load(std::sync::atomic::Ordering::Relaxed);
+
+    if !handle.is_null() {
+        let handle = HANDLE(handle);
+        gl::CreateMemoryObjectsEXT(1, &mut memory_object);
+        gl::ImportMemoryWin32HandleEXT(
+            memory_object,
+            1920 * 1080 * 4,
+            gl::HANDLE_TYPE_OPAQUE_WIN32_EXT,
+            handle.0,
+        );
+
+        gl::GenTextures(1, &mut texture);
+        gl::BindTexture(gl::TEXTURE_2D, texture);
+
+        gl::TextureStorageMem2DEXT(texture, 1, gl::RGBA8, 1920, 1080, memory_object, 0);
+        gl::CopyTexImage2D(gl::TEXTURE_2D, 1, gl::RGBA8, 0, 0, 1920, 1080, 0);
+        gl::Flush();
+        let error = gl::GetError();
+        println!("{}", error);
+        gl::DeleteTextures(1, &texture);
+    }
 
     let present_function = TRAMPOLINE
         .get()

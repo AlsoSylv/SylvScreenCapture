@@ -9,8 +9,9 @@ use windows::core::Interface;
 use windows::Win32::Foundation::HANDLE;
 use windows::Win32::Graphics::Direct3D11::{
     ID3D11Texture2D, D3D11_BIND_RENDER_TARGET, D3D11_BIND_SHADER_RESOURCE, D3D11_CPU_ACCESS_READ,
-    D3D11_RESOURCE_MISC_SHARED, D3D11_RESOURCE_MISC_SHARED_NTHANDLE, D3D11_TEXTURE2D_DESC,
-    D3D11_USAGE_DEFAULT, D3D11_USAGE_STAGING,
+    D3D11_MAPPED_SUBRESOURCE, D3D11_MAP_READ, D3D11_RESOURCE_MISC_SHARED,
+    D3D11_RESOURCE_MISC_SHARED_NTHANDLE, D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT,
+    D3D11_USAGE_STAGING,
 };
 use windows::Win32::Graphics::Dxgi::Common::{
     DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_FORMAT_UNKNOWN, DXGI_SAMPLE_DESC,
@@ -165,11 +166,11 @@ fn main() {
 
     shared_mem.set_owner(true);
 
-    // let mut texture_handle = egui_ctx.load_texture(
-    //     "RawDXOut",
-    //     Arc::new(ColorImage::default()),
-    //     TextureOptions::default(),
-    // );
+    let mut texture_handle = egui_ctx.load_texture(
+        "RawDXOut",
+        Arc::new(ColorImage::default()),
+        TextureOptions::default(),
+    );
 
     event_loop
         .run(|event, event_loop| match event {
@@ -220,7 +221,20 @@ fn main() {
                                     .default_width(150.0)
                                     .show(ctx, |ui| ui.label("New Text here!!!"));
 
-                                // unsafe { context.CopyResource(&new_texture, &texture) };
+                                unsafe { context.CopyResource(&new_texture, &texture) };
+                                let mut mapped_surface = D3D11_MAPPED_SUBRESOURCE::default();
+                                if let Err(e) = unsafe {
+                                    context.Map(
+                                        &new_texture,
+                                        0,
+                                        D3D11_MAP_READ,
+                                        0,
+                                        Some(&mut mapped_surface),
+                                    )
+                                } {
+                                    println!("Error reading mapped surface: {e}");
+                                    return;
+                                };
 
                                 let shared_ptr = shared_mem.as_ptr();
                                 let header = unsafe { &*shared_ptr.cast::<SharedMemoryHeader>() };
@@ -232,14 +246,25 @@ fn main() {
                                 let slice =
                                     unsafe { std::slice::from_raw_parts(rgba_ptr, slice_size) };
 
-                                // let image = ColorImage::from_rgba_unmultiplied([0, 0], slice);
+                                let slice = unsafe {
+                                    std::slice::from_raw_parts(
+                                        mapped_surface.pData as *const u8,
+                                        description.Width as usize
+                                            * description.Height as usize
+                                            * 4,
+                                    )
+                                };
 
-                                // texture_handle.set(image, TextureOptions::default());
+                                println!("{:?}", &slice[0..4]);
+
+                                let image = ColorImage::from_rgba_unmultiplied([1920, 1080], slice);
+
+                                texture_handle.set(image, TextureOptions::default());
 
                                 egui::CentralPanel::default().show(ctx, |ui| {
-                                    // let image =
-                                    //     Image::from_texture(&texture_handle).shrink_to_fit();
-                                    // ui.add(image);
+                                    let image =
+                                        Image::from_texture(&texture_handle).shrink_to_fit();
+                                    ui.add(image);
                                 });
                             });
 
