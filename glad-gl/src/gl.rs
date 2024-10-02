@@ -1,4 +1,5 @@
 #![allow(non_snake_case)]
+#![allow(static_mut_refs)]
 
 pub use self::enumerations::*;
 pub use self::functions::*;

@@ -2,9 +2,8 @@ use core::slice;
 use interprocess::local_socket::traits::Stream as StreamTrait;
 use interprocess::local_socket::{GenericNamespaced, Stream, ToNsName};
 use retour::RawDetour;
-use std::ffi::{c_void, CStr, CString};
+use std::ffi::{c_void, CString};
 use std::io::{ErrorKind, Read, Write};
-use std::mem::transmute;
 use std::ptr::{null, null_mut};
 use std::sync::atomic::AtomicPtr;
 use std::sync::{Once, OnceLock};
@@ -302,12 +301,12 @@ unsafe extern "system" fn new_wgl_swap_buffers(un_named_1: HDC) -> BOOL {
         gl::GenTextures(1, &mut texture);
         gl::BindTexture(gl::TEXTURE_2D, texture);
 
-        gl::TextureStorageMem2DEXT(texture, 1, gl::RGBA8, 1920, 1080, memory_object, 0);
-        gl::CopyTexImage2D(gl::TEXTURE_2D, 1, gl::RGBA8, 0, 0, 1920, 1080, 0);
-        gl::Flush();
+        gl::TexStorageMem2DEXT(gl::TEXTURE_2D, 1, gl::RGBA8, 1920, 1080, memory_object, 0);
+        gl::CopyTexSubImage2D(gl::TEXTURE_2D, 0, 0, 0, 0, 0, 1920, 1080);
         let error = gl::GetError();
         println!("{}", error);
         gl::DeleteTextures(1, &texture);
+        gl::DeleteMemoryObjectsEXT(1, &memory_object);
     }
 
     let present_function = TRAMPOLINE
@@ -317,6 +316,7 @@ unsafe extern "system" fn new_wgl_swap_buffers(un_named_1: HDC) -> BOOL {
     unsafe { (present_function.ogl)(un_named_1) }
 }
 
+#[allow(unused)]
 fn dll_attach_dx9() -> Result<(), Error> {
     const WINDOW_CLASS_NAME: PCSTR = s!("dummy_window_for_swap_chain");
 
@@ -551,6 +551,7 @@ fn new_dx9_present_function(
     unsafe { (present_function)(this.as_raw(), src_rect, dst_rect, window, rgn) }
 }
 
+#[allow(unused)]
 fn dll_attach() -> Result<(), Error> {
     const WINDOW_CLASS_NAME: PCSTR = s!("dummy_window_for_swap_chain");
 
