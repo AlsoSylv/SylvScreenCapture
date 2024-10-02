@@ -1,7 +1,9 @@
 use core::slice;
+use std::mem::transmute;
 use interprocess::local_socket::traits::Stream as StreamTrait;
 use interprocess::local_socket::{GenericNamespaced, Stream, ToNsName};
 use retour::RawDetour;
+use windows::Win32::Graphics::OpenGL::wglGetProcAddress;
 use std::ffi::c_void;
 use std::io::{ErrorKind, Read, Write};
 use std::ptr::{null, null_mut};
@@ -15,7 +17,8 @@ use windows::Win32::Graphics::Direct3D9::{
     D3DLOCK_READONLY, D3DMULTISAMPLE_NONE, D3DPOOL_SYSTEMMEM, D3DPRESENTFLAG_DEVICECLIP,
     D3DPRESENT_PARAMETERS, D3DSURFACE_DESC, D3DSWAPEFFECT_COPY,
 };
-use windows::Win32::Graphics::Gdi::RGNDATA;
+use windows::Win32::Graphics::Gdi::{HDC, RGNDATA};
+use windows::Win32::System::LibraryLoader::GetProcAddress;
 use windows::Win32::System::SystemServices;
 use windows::{
     core::{s, Interface, HRESULT, PCSTR},
@@ -52,36 +55,7 @@ use windows::{
 
 use error::Error;
 
-mod error {
-    #[derive(Debug)]
-    pub enum Error {
-        Win32(windows::core::Error),
-        Detour(retour::Error),
-    }
-
-    impl std::fmt::Display for Error {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            match self {
-                Error::Win32(e) => e.fmt(f),
-                Error::Detour(e) => e.fmt(f),
-            }
-        }
-    }
-
-    impl std::error::Error for Error {}
-
-    impl From<retour::Error> for Error {
-        fn from(value: retour::Error) -> Self {
-            Error::Detour(value)
-        }
-    }
-
-    impl From<windows::core::Error> for Error {
-        fn from(value: windows::core::Error) -> Self {
-            Error::Win32(value)
-        }
-    }
-}
+mod error;
 
 #[derive(PartialEq)]
 enum Reason {
@@ -102,6 +76,7 @@ type PresentFunctionType = unsafe extern "system" fn(*mut c_void, u32, DXGI_PRES
 union PresentFunctions {
     dx9: Dx9PresentFunctionType,
     dx11: PresentFunctionType,
+    ogl: WglSwapBuffers,
 }
 
 static DETOUR: OnceLock<RawDetour> = OnceLock::new();
@@ -145,7 +120,7 @@ fn main(hinst_dll: HINSTANCE, reason: Reason) -> Result<(), Error> {
         }
 
         std::thread::spawn(|| {
-            if let Err(e) = dll_attach_dx9() {
+            if let Err(e) = dll_attach_ogl() {
                 println!("{e}");
             }
         });
@@ -162,6 +137,118 @@ unsafe extern "system" fn def_window_pro_a(
     lparam: LPARAM,
 ) -> LRESULT {
     DefWindowProcA(hwnd, msg, wparam, lparam)
+}
+
+fn dll_attach_ogl() -> Result<(), Error> {
+    const OGL_DLL: PCSTR = s!("opengl32.dll");
+    const SWAP: PCSTR = s!("wglSwapBuffers");
+
+    println!("Looking for module...");
+
+    let module = unsafe { GetModuleHandleA(OGL_DLL)? };
+
+    println!("Module found");
+
+    println!("Looking for function...");
+
+    let func = unsafe { GetProcAddress(module, SWAP).unwrap() };
+
+    println!("Function found");
+
+    println!("Trying to reroute...");
+
+    let detour = unsafe { RawDetour::new(func as _, new_wgl_swap_buffers as _)? };
+
+    unsafe { detour.enable()? };
+
+    println!("Rerouted");
+
+    let tramponline: WglSwapBuffers = unsafe { std::mem::transmute(detour.trampoline()) };
+
+    TRAMPOLINE.get_or_init(|| PresentFunctions { ogl: tramponline });
+    DETOUR.get_or_init(|| detour);
+
+    let name = r"\\.\pipe\sylvias_shared_handle.sock"
+        .to_ns_name::<GenericNamespaced>()
+        .unwrap();
+
+    let mut try_connect = Stream::connect(name.clone());
+
+    let mut stream = loop {
+        match try_connect {
+            Err(e) if e.kind() == ErrorKind::NotFound => {
+                try_connect = Stream::connect(name.clone());
+            }
+            Err(e) => {
+                println!("{e}");
+                try_connect = Stream::connect(name.clone());
+            }
+            Ok(stream) => {
+                break stream;
+            }
+        }
+    };
+
+    stream.write_all(&std::process::id().to_le_bytes()).unwrap();
+    let mut handle = [0; 8];
+    stream.read_exact(&mut handle).unwrap();
+    let ptr = isize::from_le_bytes(handle);
+
+    let mut memory_object = 0;
+
+    const GL_CREATE_MEMORY_OBJECTS: PCSTR = s!("glCreateMemoryObjectsEXT");
+
+    let wglGetProcAddress: unsafe extern "system" fn(PCSTR) -> Option<unsafe extern "system" fn() -> isize> = unsafe { transmute(GetProcAddress(module, s!("wglGetProcAddress"))) };
+
+    let mut create_memory_object = unsafe { wglGetProcAddress(GL_CREATE_MEMORY_OBJECTS) }; 
+
+    println!("{}", windows::core::Error::from_win32());
+
+    if create_memory_object.is_none() {
+        create_memory_object = unsafe { GetProcAddress(module, GL_CREATE_MEMORY_OBJECTS) };
+
+        println!("{}", windows::core::Error::from_win32());
+    }
+    
+    if create_memory_object.is_none() {
+        panic!()
+    }
+
+    type CreateMemoryObjectsEXT = unsafe extern "C" fn(n: isize, memoryObject: *mut u32);
+    let func = gl_loader::get_proc_address("glCreateMemoryObjectsEXT");
+    assert_ne!(func, null());
+    let CreateMemoryObjectsEXT: CreateMemoryObjectsEXT = unsafe { transmute(GetProcAddress(module, s!("CreateMemoryObjectsEXT")).unwrap()) };
+
+    type ImportMemoryWin32HandleEXT = unsafe extern "C" fn(memory: u32, size: u64, handleType: i32, handle: *mut c_void);
+    let ImportMemoryWin32HandleEXT: ImportMemoryWin32HandleEXT = unsafe { transmute(GetProcAddress(module, s!("ImportMemoryWin32HandleEXT")).unwrap()) };
+
+    unsafe { CreateMemoryObjectsEXT(1, &mut memory_object); }
+
+    unsafe { ImportMemoryWin32HandleEXT(memory_object, 1920 * 1080 * 4, 0x958B, ptr as _); }
+
+    println!("{memory_object}");
+
+    Ok(())
+}
+
+type WglSwapBuffers = unsafe extern "system" fn(HDC) -> BOOL;
+
+extern "C" {
+    // fn CreateMemoryObjectsEXT(n: isize, memoryObject: *mut u32);
+
+    // fn ImportMemoryWin32HandleEXT(memory: u32, size: u64, handleType: i32, handle: *mut c_void);
+}
+
+unsafe extern "system" fn new_wgl_swap_buffers(un_named_1: HDC) -> BOOL {
+    static ONCE: Once = Once::new();
+
+    ONCE.call_once(|| println!("Called once"));
+
+    let present_function = TRAMPOLINE
+        .get()
+        .expect("The trampoline was set before this was ever called.");
+
+    unsafe { (present_function.ogl)(un_named_1) }
 }
 
 fn dll_attach_dx9() -> Result<(), Error> {

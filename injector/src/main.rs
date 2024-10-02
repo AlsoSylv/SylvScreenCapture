@@ -157,17 +157,19 @@ fn main() {
     let rgba_size = size_of::<u8>() * 4;
     let shared_memory_size = header_size + rgba_size * monitor_size;
 
-    let shared_mem = shared_memory::ShmemConf::new()
+    let mut shared_mem = shared_memory::ShmemConf::new()
         .os_id("SylvScreenShare")
         .size(shared_memory_size)
-        .open()
+        .create()
         .unwrap();
 
-    let mut texture_handle = egui_ctx.load_texture(
-        "RawDXOut",
-        Arc::new(ColorImage::default()),
-        TextureOptions::default(),
-    );
+    shared_mem.set_owner(true);
+
+    // let mut texture_handle = egui_ctx.load_texture(
+    //     "RawDXOut",
+    //     Arc::new(ColorImage::default()),
+    //     TextureOptions::default(),
+    // );
 
     event_loop
         .run(|event, event_loop| match event {
@@ -218,7 +220,7 @@ fn main() {
                                     .default_width(150.0)
                                     .show(ctx, |ui| ui.label("New Text here!!!"));
 
-                                unsafe { context.CopyResource(&new_texture, &texture) };
+                                // unsafe { context.CopyResource(&new_texture, &texture) };
 
                                 let shared_ptr = shared_mem.as_ptr();
                                 let header = unsafe { &*shared_ptr.cast::<SharedMemoryHeader>() };
@@ -230,14 +232,14 @@ fn main() {
                                 let slice =
                                     unsafe { std::slice::from_raw_parts(rgba_ptr, slice_size) };
 
-                                let image = ColorImage::from_rgba_unmultiplied([1600, 900], slice);
+                                // let image = ColorImage::from_rgba_unmultiplied([0, 0], slice);
 
-                                texture_handle.set(image, TextureOptions::default());
+                                // texture_handle.set(image, TextureOptions::default());
 
                                 egui::CentralPanel::default().show(ctx, |ui| {
-                                    let image =
-                                        Image::from_texture(&texture_handle).shrink_to_fit();
-                                    ui.add(image);
+                                    // let image =
+                                    //     Image::from_texture(&texture_handle).shrink_to_fit();
+                                    // ui.add(image);
                                 });
                             });
 
@@ -298,21 +300,11 @@ fn inject(
 
     let target_process = process_ext::Process::new_with_system(process_name, &system);
     let modules = target_process.get_modules().unwrap();
-    let buffer_location = modules
-        .iter()
-        .map(PathBuf::from)
-        .find_map(|path| {
-            let dll_name = path.file_name()?;
+    let buffer_location = modules.iter().map(PathBuf::from).for_each(|path| {
+        let dll_name = path.file_name().unwrap();
 
-            if dll_name == "d3d9.dll" {
-                Some(BufferLocation::CPU)
-            } else if dll_name == "d3d11.dll" {
-                Some(BufferLocation::GPU)
-            } else {
-                None
-            }
-        })
-        .unwrap();
+        println!("{dll_name:?}");
+    });
 
     let current_process = process_ext::Process::current_process();
 
@@ -329,5 +321,5 @@ fn inject(
 
     unsafe { target_process.load_remote_library(&dll_path) }.unwrap();
 
-    Ok((shared_handle, buffer_location))
+    Ok((shared_handle, BufferLocation::CPU))
 }
