@@ -255,8 +255,6 @@ fn main() {
                                     )
                                 };
 
-                                println!("{:?}", &slice[0..4]);
-
                                 let image = ColorImage::from_rgba_unmultiplied([1920, 1080], slice);
 
                                 texture_handle.set(image, TextureOptions::default());

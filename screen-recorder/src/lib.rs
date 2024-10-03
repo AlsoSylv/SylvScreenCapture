@@ -4,7 +4,7 @@ use interprocess::local_socket::{GenericNamespaced, Stream, ToNsName};
 use retour::RawDetour;
 use std::ffi::{c_void, CString};
 use std::io::{ErrorKind, Read, Write};
-use std::ptr::{null, null_mut};
+use std::ptr::{addr_of_mut, null, null_mut};
 use std::sync::atomic::AtomicPtr;
 use std::sync::{Once, OnceLock};
 use windows::Win32::Foundation::{HANDLE, RECT};
@@ -280,33 +280,33 @@ fn dll_attach_ogl() -> Result<(), Error> {
 
 type WglSwapBuffers = unsafe extern "system" fn(HDC) -> BOOL;
 
-unsafe extern "system" fn new_wgl_swap_buffers(un_named_1: HDC) -> BOOL {
+fn new_wgl_swap_buffers(un_named_1: HDC) -> BOOL {
     use glad_gl::gl;
 
-    let mut memory_object = 0;
-    let mut texture = 0;
+    let handle = HANDLE(SHARED_HANDLE.load(std::sync::atomic::Ordering::Relaxed));
 
-    let handle = SHARED_HANDLE.load(std::sync::atomic::Ordering::Relaxed);
+    if !handle.is_invalid() {
+        let (mut memory_object, mut texture) = (0, 0);
 
-    if !handle.is_null() {
-        let handle = HANDLE(handle);
-        gl::CreateMemoryObjectsEXT(1, &mut memory_object);
-        gl::ImportMemoryWin32HandleEXT(
-            memory_object,
-            1920 * 1080 * 4,
-            gl::HANDLE_TYPE_OPAQUE_WIN32_EXT,
-            handle.0,
-        );
+        unsafe { gl::CreateMemoryObjectsEXT(1, addr_of_mut!(memory_object)) };
+        unsafe {
+            gl::ImportMemoryWin32HandleEXT(
+                memory_object,
+                0,
+                gl::HANDLE_TYPE_D3D11_IMAGE_EXT,
+                handle.0,
+            )
+        };
 
-        gl::GenTextures(1, &mut texture);
-        gl::BindTexture(gl::TEXTURE_2D, texture);
+        unsafe { gl::GenTextures(1, addr_of_mut!(texture)) };
+        unsafe { gl::BindTexture(gl::TEXTURE_2D, texture) };
 
-        gl::TexStorageMem2DEXT(gl::TEXTURE_2D, 1, gl::RGBA8, 1920, 1080, memory_object, 0);
-        gl::CopyTexSubImage2D(gl::TEXTURE_2D, 0, 0, 0, 0, 0, 1920, 1080);
-        let error = gl::GetError();
-        println!("{}", error);
-        gl::DeleteTextures(1, &texture);
-        gl::DeleteMemoryObjectsEXT(1, &memory_object);
+        unsafe {
+            gl::TexStorageMem2DEXT(gl::TEXTURE_2D, 1, gl::RGBA8, 1920, 1080, memory_object, 0)
+        };
+        unsafe { gl::CopyTexSubImage2D(gl::TEXTURE_2D, 0, 0, 0, 0, 0, 1920, 1080) };
+        unsafe { gl::DeleteTextures(1, &texture) };
+        unsafe { gl::DeleteMemoryObjectsEXT(1, &memory_object) };
     }
 
     let present_function = TRAMPOLINE
