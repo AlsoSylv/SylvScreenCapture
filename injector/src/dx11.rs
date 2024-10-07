@@ -7,12 +7,13 @@ use windows::Win32::Graphics::Direct3D11::{
     D3D11_SDK_VERSION,
 };
 use windows::Win32::Graphics::Dxgi::Common::{
-    DXGI_FORMAT_R8G8B8A8_UNORM_SRGB, DXGI_MODE_DESC, DXGI_MODE_SCALING_UNSPECIFIED,
-    DXGI_MODE_SCANLINE_ORDER_UNSPECIFIED, DXGI_RATIONAL, DXGI_SAMPLE_DESC,
+    DXGI_FORMAT_R8G8B8A8_UNORM_SRGB, DXGI_FORMAT_UNKNOWN, DXGI_MODE_DESC,
+    DXGI_MODE_SCALING_UNSPECIFIED, DXGI_MODE_SCANLINE_ORDER_UNSPECIFIED, DXGI_RATIONAL,
+    DXGI_SAMPLE_DESC,
 };
 use windows::Win32::Graphics::Dxgi::{
     CreateDXGIFactory, IDXGIFactory, IDXGISwapChain, DXGI_MWA_NO_ALT_ENTER, DXGI_SWAP_CHAIN_DESC,
-    DXGI_SWAP_EFFECT_DISCARD, DXGI_USAGE_RENDER_TARGET_OUTPUT,
+    DXGI_SWAP_CHAIN_FLAG, DXGI_SWAP_EFFECT_DISCARD, DXGI_USAGE_RENDER_TARGET_OUTPUT,
 };
 use winit::raw_window_handle::Win32WindowHandle;
 
@@ -77,4 +78,20 @@ pub fn create_device_and_swap_chain(
     }
 
     (swap_chain.unwrap(), device.unwrap(), context.unwrap())
+}
+
+pub fn resize_back_buffer(
+    swap_chain: &IDXGISwapChain,
+    new_width: u32,
+    new_height: u32,
+) -> Result<(), windows::core::Error> {
+    unsafe {
+        swap_chain.ResizeBuffers(
+            0,
+            new_width,
+            new_height,
+            DXGI_FORMAT_UNKNOWN,
+            DXGI_SWAP_CHAIN_FLAG(0),
+        )
+    }
 }
