@@ -1,11 +1,10 @@
 use core::slice;
-use std::mem::transmute;
 use interprocess::local_socket::traits::Stream as StreamTrait;
 use interprocess::local_socket::{GenericNamespaced, Stream, ToNsName};
 use retour::RawDetour;
-use windows::Win32::System::LibraryLoader::GetProcAddress;
 use std::ffi::c_void;
 use std::io::{ErrorKind, Read, Write};
+use std::mem::transmute;
 use std::ptr::{addr_of_mut, null, null_mut};
 use std::sync::atomic::{AtomicBool, AtomicPtr};
 use std::sync::{Once, OnceLock};
@@ -17,8 +16,8 @@ use windows::Win32::Graphics::Direct3D9::{
     D3DSURFACE_DESC,
 };
 use windows::Win32::Graphics::Gdi::{HDC, RGNDATA};
+use windows::Win32::System::LibraryLoader::GetProcAddress;
 use windows::Win32::System::SystemServices;
-use windows::Win32::System::Threading::{IsWow64Process, OpenProcess, PROCESS_QUERY_INFORMATION};
 use windows::{
     core::{s, Interface, HRESULT, PCSTR},
     Win32::{
@@ -26,8 +25,7 @@ use windows::{
         Graphics::{
             Direct3D::D3D_DRIVER_TYPE_HARDWARE,
             Direct3D11::{
-                D3D11CreateDeviceAndSwapChain, ID3D11Device, ID3D11Texture2D,
-                D3D11_CREATE_DEVICE_FLAG, D3D11_SDK_VERSION,
+                ID3D11Device, ID3D11Texture2D, D3D11_CREATE_DEVICE_FLAG, D3D11_SDK_VERSION,
             },
             Dxgi::{
                 Common::{
@@ -127,7 +125,7 @@ pub extern "stdcall" fn dll_main(hinst_dll: HINSTANCE, fdw_reason: u32, _: *mut 
 
 fn main(hinst_dll: HINSTANCE, reason: Reason) -> Result<(), Error> {
     if reason == Reason::DllProcessAttach {
-        // #[cfg(debug_assertions)]
+        #[cfg(debug_assertions)]
         unsafe {
             AllocConsole()?;
         }
@@ -500,7 +498,7 @@ fn dll_attach(module: HMODULE) -> Result<(), Error> {
 
     let mut swap_chain: *mut IDXGISwapChain = null_mut();
 
-    type D3D11Create = fn(
+    type D3D11Create = unsafe extern "system" fn(
         padapter: *mut c_void,
         drivertype: D3D_DRIVER_TYPE,
         software: HMODULE,
@@ -515,13 +513,14 @@ fn dll_attach(module: HMODULE) -> Result<(), Error> {
         ppimmediatecontext: *mut *mut c_void,
     ) -> HRESULT;
 
-    let create_device = unsafe { GetProcAddress(module, s!("D3D11CreateDeviceAndSwapChain")) };
+    let create_device =
+        unsafe { GetProcAddress(module, s!("D3D11CreateDeviceAndSwapChain")).unwrap() };
 
     #[allow(non_snake_case)]
     let D3D11CreateDeviceAndSwapChain: D3D11Create = unsafe { transmute(create_device) };
 
     unsafe {
-        D3D11CreateDeviceAndSwapChain(
+        let result = D3D11CreateDeviceAndSwapChain(
             null_mut(),
             D3D_DRIVER_TYPE_HARDWARE,
             HMODULE(null_mut()),
@@ -530,11 +529,15 @@ fn dll_attach(module: HMODULE) -> Result<(), Error> {
             0,
             D3D11_SDK_VERSION,
             &swap_chain_desc,
-            &mut addr_of_mut!(swap_chain).cast::<c_void>(),
+            &mut addr_of_mut!(swap_chain).cast(),
             null_mut(),
             null_mut(),
             null_mut(),
         );
+
+        if result.is_err() {
+            return Err(windows::core::Error::from_win32().into());
+        }
     };
 
     assert!(!swap_chain.is_null());
@@ -586,6 +589,8 @@ fn new_present_function(this: *mut c_void, sync_internal: u32, flags: DXGI_PRESE
     let present_function = DXGI_SWAP_BUFFER
         .get()
         .expect("The trampoline was set before this was ever called.");
+
+    println!("h");
 
     if WAS_OPENGL_CALL.load(std::sync::atomic::Ordering::SeqCst) {
         WAS_OPENGL_CALL.store(false, std::sync::atomic::Ordering::SeqCst);

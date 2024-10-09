@@ -57,6 +57,7 @@ struct App {
     shared_handle: Option<HANDLE>,
     listener: Option<Listener>,
     shared_memory: Option<shared_memory::Shmem>,
+    description: Option<D3D11_TEXTURE2D_DESC>,
 }
 
 impl ApplicationHandler for App {
@@ -213,6 +214,7 @@ impl ApplicationHandler for App {
             listener: Some(listener),
             shared_handle: Some(shared_handle),
             shared_memory: Some(shared_mem),
+            description: Some(description),
         };
 
         *self = state;
@@ -237,6 +239,7 @@ impl ApplicationHandler for App {
         let texture_handle = self.texture_handle.as_mut().unwrap();
         let shared_handle = self.shared_handle.as_mut().unwrap();
         let listener = self.listener.as_mut().unwrap();
+        let description = self.description.as_mut().unwrap();
 
         let header_size = size_of::<SharedMemoryHeader>();
         let rgba_size = size_of::<u8>() * 4;
@@ -269,19 +272,19 @@ impl ApplicationHandler for App {
                             .show(ctx, |ui| ui.label("New Text here!!!"));
 
                         unsafe { d3d11_ctx.CopyResource(&*new_texture, &*texture) };
-                        // let mut mapped_surface = D3D11_MAPPED_SUBRESOURCE::default();
-                        // if let Err(e) = unsafe {
-                        //     d3d11_ctx.Map(
-                        //         &new_texture,
-                        //         0,
-                        //         D3D11_MAP_READ,
-                        //         0,
-                        //         Some(&mut mapped_surface),
-                        //     )
-                        // } {
-                        //     println!("Error reading mapped surface: {e}");
-                        //     return;
-                        // };
+                        let mut mapped_surface = D3D11_MAPPED_SUBRESOURCE::default();
+                        if let Err(e) = unsafe {
+                            d3d11_ctx.Map(
+                                &*new_texture,
+                                0,
+                                D3D11_MAP_READ,
+                                0,
+                                Some(&mut mapped_surface),
+                            )
+                        } {
+                            println!("Error reading mapped surface: {e}");
+                            return;
+                        };
 
                         let shared_ptr = shared_mem.as_ptr();
                         let header = unsafe { &*shared_ptr.cast::<SharedMemoryHeader>() };
@@ -289,26 +292,25 @@ impl ApplicationHandler for App {
 
                         let buffer_size = (header.width * header.height) as usize;
                         let slice_size = buffer_size * rgba_size;
-
+                        #[allow(unused)]
                         let slice = unsafe { std::slice::from_raw_parts(rgba_ptr, slice_size) };
 
-                        // let slice = unsafe {
-                        //     std::slice::from_raw_parts(
-                        //         mapped_surface.pData as *const u8,
-                        //         description.Width as usize
-                        //             * description.Height as usize
-                        //             * 4,
-                        //     )
-                        // };
-
-                        let image = if (header.width as usize | header.height as usize) == 0 {
-                            ColorImage::from_rgba_unmultiplied([1, 1], &[0, 0, 0, 255])
-                        } else {
-                            ColorImage::from_rgba_unmultiplied(
-                                [header.width as usize, header.height as usize],
-                                slice,
+                        let slice = unsafe {
+                            std::slice::from_raw_parts(
+                                mapped_surface.pData as *const u8,
+                                description.Width as usize * description.Height as usize * 4,
                             )
                         };
+
+                        let image =
+                            if (description.Width as usize | description.Height as usize) == 0 {
+                                ColorImage::from_rgba_unmultiplied([1, 1], &[0, 0, 0, 255])
+                            } else {
+                                ColorImage::from_rgba_unmultiplied(
+                                    [description.Width as usize, description.Height as usize],
+                                    slice,
+                                )
+                            };
 
                         texture_handle.set(image, TextureOptions::default());
 

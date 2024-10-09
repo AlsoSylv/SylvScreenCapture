@@ -1,16 +1,19 @@
+use std::mem::transmute;
+
 use windows::{
-    core::{Interface, HRESULT},
+    core::{s, Interface, HRESULT},
     Win32::{
         Foundation::{HMODULE, HWND, RECT},
         Graphics::{
             Direct3D9::{
-                D3D9b_SDK_VERSION, Direct3DCreate9, IDirect3DDevice9,
+                D3D9b_SDK_VERSION, IDirect3D9, IDirect3DDevice9,
                 D3DCREATE_HARDWARE_VERTEXPROCESSING, D3DDEVTYPE_HAL, D3DFMT_UNKNOWN,
                 D3DMULTISAMPLE_NONE, D3DPRESENTFLAG_DEVICECLIP, D3DPRESENT_PARAMETERS,
                 D3DSWAPEFFECT_COPY, D3DVIEWPORT9,
             },
             Gdi::RGNDATA,
         },
+        System::LibraryLoader::GetProcAddress,
         UI::WindowsAndMessaging::WNDCLASSEXA,
     },
 };
@@ -43,8 +46,16 @@ impl RenderingAPI for DX9Hooks {
         self.device.vtable().SetViewport as _
     }
 
-    fn create(_: HMODULE) -> Result<Self, crate::error::Error> {
+    fn create(module: HMODULE) -> Result<Self, crate::error::Error> {
         let (window, window_class) = unsafe { super::create_window() }?;
+
+        type Direct3DCreate9 = unsafe extern "system" fn(u32) -> Option<IDirect3D9>;
+
+        let direct_3d_create9_ptr =
+            unsafe { GetProcAddress(module, s!("Direct3DCreate9")).unwrap() };
+
+        #[allow(non_snake_case)]
+        let Direct3DCreate9: Direct3DCreate9 = unsafe { transmute(direct_3d_create9_ptr) };
 
         let d3d9 = unsafe { Direct3DCreate9(D3D9b_SDK_VERSION) }.unwrap();
 

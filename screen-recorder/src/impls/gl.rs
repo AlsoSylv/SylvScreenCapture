@@ -1,4 +1,4 @@
-use std::ffi::CString;
+use std::{ffi::CString, mem::transmute};
 
 use windows::{
     core::{s, PCSTR},
@@ -7,7 +7,6 @@ use windows::{
         Graphics::{
             Gdi::{GetDC, HDC},
             OpenGL::{
-                wglCreateContext, wglDeleteContext, wglGetProcAddress, wglMakeCurrent,
                 ChoosePixelFormat, SetPixelFormat, HGLRC, PFD_DOUBLEBUFFER, PFD_DRAW_TO_WINDOW,
                 PFD_MAIN_PLANE, PFD_SUPPORT_OPENGL, PFD_TYPE_RGBA, PIXELFORMATDESCRIPTOR,
             },
@@ -72,13 +71,35 @@ impl RenderingAPI for OpenGLHooks {
 
         unsafe { SetPixelFormat(dc, pixel_format_idx, &pixel_format)? };
 
-        let context = unsafe { wglCreateContext(dc)? };
+        type PROC = Option<unsafe extern "system" fn() -> isize>;
+        type WglCreateContext = unsafe extern "system" fn(HDC) -> HGLRC;
+        type WglMakeCurrent = unsafe extern "system" fn(HDC, HGLRC) -> BOOL;
+        type WglGetProcAddress = unsafe extern "system" fn(PCSTR) -> PROC;
 
-        unsafe { wglMakeCurrent(dc, context)? };
+        let wgl_create_context_ptr =
+            unsafe { GetProcAddress(module, s!("wglCreateContext")).unwrap() };
+        let wgl_make_current_ptr = unsafe { GetProcAddress(module, s!("wglMakeCurrent")).unwrap() };
+        let wgl_get_proc_address_ptr =
+            unsafe { GetProcAddress(module, s!("wglGetProcAddress")).unwrap() };
+
+        #[allow(non_snake_case)]
+        let wglCreateContext: WglCreateContext = unsafe { transmute(wgl_create_context_ptr) };
+        #[allow(non_snake_case)]
+        let wglMakeCurrent: WglMakeCurrent = unsafe { transmute(wgl_make_current_ptr) };
+        #[allow(non_snake_case)]
+        let wglGetProcAddress: WglGetProcAddress = unsafe { transmute(wgl_get_proc_address_ptr) };
+
+        let context = unsafe { wglCreateContext(dc) };
+
+        if context.is_invalid() {
+            return Err(windows::core::Error::from_win32().into());
+        }
+
+        unsafe { wglMakeCurrent(dc, context).ok()? };
 
         glad_gl::gl::load(|func_ptr| {
             let c_string = CString::new(func_ptr).unwrap();
-            let cstr = PCSTR::from_raw(c_string.as_ptr() as _);
+            let cstr = PCSTR(c_string.as_ptr() as _);
 
             let func_ptr = unsafe { wglGetProcAddress(cstr) };
 
@@ -101,11 +122,24 @@ impl RenderingAPI for OpenGLHooks {
     }
 
     fn destory(&self) -> Result<(), crate::error::Error> {
+        type WglMakeCurrent = unsafe extern "system" fn(HDC, HGLRC) -> BOOL;
+        type WglDeleteContext = unsafe extern "system" fn(HGLRC) -> BOOL;
+
+        let wgl_make_current_ptr =
+            unsafe { GetProcAddress(self.module, s!("wglMakeCurrent")).unwrap() };
+        let wgl_delete_context_ptr =
+            unsafe { GetProcAddress(self.module, s!("wglDeleteContext")).unwrap() };
+
+        #[allow(non_snake_case)]
+        let wglMakeCurrent: WglMakeCurrent = unsafe { transmute(wgl_make_current_ptr) };
+        #[allow(non_snake_case)]
+        let wglDeleteContext: WglDeleteContext = unsafe { transmute(wgl_delete_context_ptr) };
+
         unsafe {
-            wglMakeCurrent(self.dc, HGLRC::default())?;
+            wglMakeCurrent(self.dc, HGLRC::default()).ok()?;
         }
         unsafe {
-            wglDeleteContext(self.ctx)?;
+            wglDeleteContext(self.ctx).ok()?;
         }
         unsafe { super::delete_window(self.window, self.window_class)? }
 
