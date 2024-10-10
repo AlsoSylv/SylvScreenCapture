@@ -319,7 +319,7 @@ impl ApplicationHandler for App {
                             ui.add(image);
                         });
 
-                        // unsafe { d3d11_ctx.Unmap(&*new_texture, 0) };
+                        unsafe { d3d11_ctx.Unmap(&*new_texture, 0) };
                     });
 
                     let (render_output, platform_output, _) = egui_directx11::split_output(output);

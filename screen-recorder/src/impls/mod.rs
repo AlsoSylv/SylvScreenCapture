@@ -12,9 +12,11 @@ use windows::{
 
 use crate::error::Error;
 
+pub use dx11::DX11Hooks;
 pub use dx9::DX9Hooks;
 pub use gl::OpenGLHooks;
 
+mod dx11;
 mod dx9;
 mod gl;
 
@@ -25,8 +27,8 @@ unsafe fn create_window() -> Result<(HWND, WNDCLASSEXA), Error> {
         let mut window_class = WNDCLASSEXA::default();
         window_class.cbSize = size_of::<WNDCLASSEXA>() as u32;
         window_class.style = CS_HREDRAW | CS_VREDRAW;
-        window_class.lpfnWndProc = Some(crate::def_window_pro_a);
-        window_class.hInstance = unsafe { GetModuleHandleA(None).unwrap().into() };
+        window_class.lpfnWndProc = Some(def_window_pro_a);
+        window_class.hInstance = unsafe { GetModuleHandleA(None)?.into() };
         window_class.lpszClassName = WINDOW_CLASS_NAME;
         window_class.lpszMenuName = PCSTR::null();
         window_class
@@ -67,4 +69,14 @@ unsafe fn delete_window(window: HWND, window_class: WNDCLASSEXA) -> Result<(), E
     }
 
     Ok(())
+}
+
+// Workaround
+unsafe extern "system" fn def_window_pro_a(
+    hwnd: HWND,
+    msg: u32,
+    wparam: windows::Win32::Foundation::WPARAM,
+    lparam: windows::Win32::Foundation::LPARAM,
+) -> windows::Win32::Foundation::LRESULT {
+    windows::Win32::UI::WindowsAndMessaging::DefWindowProcA(hwnd, msg, wparam, lparam)
 }

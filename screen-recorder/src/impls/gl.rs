@@ -1,9 +1,10 @@
-use std::{ffi::CString, mem::transmute};
+use std::{ffi::CString, mem::transmute, ptr::addr_of_mut, sync::OnceLock};
 
+use retour::RawDetour;
 use windows::{
     core::{s, PCSTR},
     Win32::{
-        Foundation::{BOOL, HMODULE, HWND},
+        Foundation::{BOOL, HANDLE, HMODULE, HWND},
         Graphics::{
             Gdi::{GetDC, HDC},
             OpenGL::{
@@ -18,8 +19,9 @@ use windows::{
 
 use crate::RenderingAPI;
 
-type WglSwapBuffers = unsafe extern "system" fn(HDC) -> BOOL;
-type GlViewPort = unsafe fn(i32, i32, i32, i32);
+static OPENGL_SWAP_BUFFERS: OnceLock<<OpenGLHooks as RenderingAPI>::PresentFn> = OnceLock::new();
+
+static DETOUR: OnceLock<RawDetour> = OnceLock::new();
 
 pub struct OpenGLHooks {
     module: HMODULE,
@@ -30,11 +32,11 @@ pub struct OpenGLHooks {
 }
 
 impl RenderingAPI for OpenGLHooks {
-    type PresentFn = WglSwapBuffers;
-    type ResizeFn = GlViewPort;
+    type PresentFn = unsafe extern "system" fn(HDC) -> BOOL;
+    type ResizeFn = unsafe fn(i32, i32, i32, i32);
 
     fn present_fn(&self) -> *const () {
-        const SWAP: windows::core::PCSTR = s!("wglSwapBuffers");
+        const SWAP: PCSTR = s!("wglSwapBuffers");
 
         let func = unsafe { GetProcAddress(self.module, SWAP).unwrap() };
         func as _
@@ -121,7 +123,7 @@ impl RenderingAPI for OpenGLHooks {
         })
     }
 
-    fn destory(&self) -> Result<(), crate::error::Error> {
+    fn destroy(&self) -> Result<(), crate::error::Error> {
         type WglMakeCurrent = unsafe extern "system" fn(HDC, HGLRC) -> BOOL;
         type WglDeleteContext = unsafe extern "system" fn(HGLRC) -> BOOL;
 
@@ -145,4 +147,58 @@ impl RenderingAPI for OpenGLHooks {
 
         Ok(())
     }
+
+    fn trampoline() -> Self::PresentFn {
+        *OPENGL_SWAP_BUFFERS.get().unwrap()
+    }
+
+    fn set_trampoline(func: Self::PresentFn) {
+        OPENGL_SWAP_BUFFERS.set(func).unwrap()
+    }
+
+    fn new_present_fn() -> Self::PresentFn {
+        new_wgl_swap_buffers
+    }
+
+    fn set_detour(detour: RawDetour) {
+        DETOUR.set(detour).unwrap()
+    }
+}
+
+unsafe extern "system" fn new_wgl_swap_buffers(un_named_1: HDC) -> BOOL {
+    use glad_gl::gl;
+
+    // WAS_OPENGL_CALL.store(true, std::sync::atomic::Ordering::SeqCst);
+
+    let handle = HANDLE(crate::SHARED_HANDLE.load(std::sync::atomic::Ordering::Relaxed));
+
+    if !handle.is_invalid() {
+        let (mut memory_object, mut texture) = (0, 0);
+
+        unsafe { gl::CreateMemoryObjectsEXT(1, addr_of_mut!(memory_object)) };
+        unsafe {
+            gl::ImportMemoryWin32HandleEXT(
+                memory_object,
+                0,
+                gl::HANDLE_TYPE_D3D11_IMAGE_EXT,
+                handle.0,
+            )
+        };
+
+        unsafe { gl::GenTextures(1, addr_of_mut!(texture)) };
+        unsafe { gl::BindTexture(gl::TEXTURE_2D, texture) };
+
+        unsafe {
+            gl::TexStorageMem2DEXT(gl::TEXTURE_2D, 1, gl::RGBA8, 1920, 1080, memory_object, 0)
+        };
+        unsafe { gl::CopyTexSubImage2D(gl::TEXTURE_2D, 0, 0, 0, 0, 0, 1920, 1080) };
+        unsafe { gl::DeleteTextures(1, &texture) };
+        unsafe { gl::DeleteMemoryObjectsEXT(1, &memory_object) };
+    }
+
+    let present_function = OPENGL_SWAP_BUFFERS
+        .get()
+        .expect("The trampoline was set before this was ever called.");
+
+    unsafe { present_function(un_named_1) }
 }
