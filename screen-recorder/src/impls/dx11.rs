@@ -1,9 +1,10 @@
 use crate::error::Error;
-use crate::{RenderingAPI, SHARED_BUFFER, SHARED_HANDLE, WAS_OPENGL_CALL};
+use crate::{RenderingAPI, SHARED_HANDLE, WAS_OPENGL_CALL};
 use retour::RawDetour;
 use std::ffi::c_void;
 use std::mem::transmute;
-use std::ptr::{null, null_mut};
+use std::ptr::{null, null_mut, NonNull};
+use std::sync::atomic::Ordering;
 use std::sync::OnceLock;
 use windows::core::{s, Interface, HRESULT};
 use windows::Win32::Foundation::{BOOL, HANDLE, HMODULE, HWND};
@@ -14,7 +15,7 @@ use windows::Win32::Graphics::Direct3D11::{
     ID3D11Device, ID3D11Device1, ID3D11DeviceContext, ID3D11Texture2D, D3D11_SDK_VERSION,
 };
 use windows::Win32::Graphics::Dxgi::Common::{
-    DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_MODE_DESC, DXGI_MODE_SCALING_UNSPECIFIED,
+    DXGI_FORMAT, DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_MODE_DESC, DXGI_MODE_SCALING_UNSPECIFIED,
     DXGI_MODE_SCANLINE_ORDER_UNSPECIFIED, DXGI_RATIONAL, DXGI_SAMPLE_DESC,
 };
 use windows::Win32::Graphics::Dxgi::{
@@ -28,7 +29,8 @@ use windows::Win32::UI::WindowsAndMessaging::WNDCLASSEXA;
 static DXGI_SWAP_BUFFER: OnceLock<<DX11Hooks as RenderingAPI>::PresentFn> = OnceLock::new();
 static DETOUR: OnceLock<RawDetour> = OnceLock::new();
 
-type PresentFunctionType = unsafe extern "system" fn(*mut c_void, u32, DXGI_PRESENT) -> HRESULT;
+type PresentFn = unsafe extern "system" fn(*mut c_void, u32, DXGI_PRESENT) -> HRESULT;
+type ResizeFn = unsafe extern "system" fn(*mut c_void, u32, u32, u32, DXGI_FORMAT, u32) -> HRESULT;
 
 pub struct DX11Hooks {
     window: HWND,
@@ -37,8 +39,8 @@ pub struct DX11Hooks {
 }
 
 impl RenderingAPI for DX11Hooks {
-    type PresentFn = PresentFunctionType;
-    type ResizeFn = ();
+    type PresentFn = PresentFn;
+    type ResizeFn = ResizeFn;
 
     fn present_fn(&self) -> *const () {
         self.swap_chain.vtable().Present as _
@@ -157,53 +159,49 @@ unsafe extern "system" fn new_present_function(
     sync_internal: u32,
     flags: DXGI_PRESENT,
 ) -> HRESULT {
-    let present_function = DXGI_SWAP_BUFFER
-        .get()
-        .expect("The trampoline was set before this was ever called.");
+    const GET_PRESENT_ERROOR: &str = "The trampoline was set before this was ever called.";
+    static SHARED_BUFFER: OnceLock<ID3D11Texture2D> = OnceLock::new();
 
-    if WAS_OPENGL_CALL.load(std::sync::atomic::Ordering::SeqCst) {
-        WAS_OPENGL_CALL.store(false, std::sync::atomic::Ordering::SeqCst);
+    let present_function = *DXGI_SWAP_BUFFER.get().expect(GET_PRESENT_ERROOR);
 
-        return unsafe { present_function(this, sync_internal, flags) };
-    }
-
-    let this = unsafe { IDXGISwapChain::from_raw(this) };
-
-    let device: ID3D11Device = unsafe { this.GetDevice() }.unwrap();
-    let device_1: ID3D11Device1 = device.cast().unwrap();
-
-    if let Some(shared_buffer) = SHARED_BUFFER.get() {
-        let context = unsafe { device.GetImmediateContext() }.unwrap();
-        let back_buffer: ID3D11Texture2D = unsafe { this.GetBuffer(0) }.unwrap();
-
-        // TODO: Find a better way of debugging
-        // #[cfg(debug_assertions)]
-        // {
-        //     static DESCRIPTION: Once = Once::new();
-        //     DESCRIPTION.call_once(|| {
-        //         let mut desc = D3D11_TEXTURE2D_DESC::default();
-        //         unsafe { back_buffer.GetDesc(&mut desc) };
-        //         println!("{:?}", desc);
-        //     });
-        // }
-
-        unsafe { context.CopyResource(shared_buffer, &back_buffer) };
+    if WAS_OPENGL_CALL.load(Ordering::SeqCst) {
+        WAS_OPENGL_CALL.store(false, Ordering::SeqCst);
     } else {
-        let handle = SHARED_HANDLE.load(std::sync::atomic::Ordering::Relaxed);
+        let this = unsafe { IDXGISwapChain::from_raw(this) };
 
-        if !handle.is_null() {
-            let maybe_shared_buffer = unsafe { device_1.OpenSharedResource1(HANDLE(handle)) };
+        let device: ID3D11Device = unsafe { this.GetDevice() }.unwrap();
+        let device_1: ID3D11Device1 = device.cast().unwrap();
 
-            match maybe_shared_buffer {
-                Ok(shared_buffer) => {
+        if let Some(shared_buffer) = SHARED_BUFFER.get() {
+            let context = unsafe { device.GetImmediateContext() }.unwrap();
+            let back_buffer: ID3D11Texture2D = unsafe { this.GetBuffer(0) }.unwrap();
+
+            // TODO: Find a better way of debugging
+            // #[cfg(debug_assertions)]
+            // {
+            //     static DESCRIPTION: Once = Once::new();
+            //     DESCRIPTION.call_once(|| {
+            //         let mut desc = D3D11_TEXTURE2D_DESC::default();
+            //         unsafe { back_buffer.GetDesc(&mut desc) };
+            //         println!("{:?}", desc);
+            //     });
+            // }
+
+            unsafe { context.CopyResource(shared_buffer, &back_buffer) };
+        } else {
+            let handle = NonNull::new(SHARED_HANDLE.load(Ordering::Relaxed));
+            let handle = handle.map(|ptr| HANDLE(ptr.as_ptr()));
+
+            if let Some(handle) = handle {
+                let maybe_shared_buffer = unsafe { device_1.OpenSharedResource1(handle) };
+                if let Ok(shared_buffer) = maybe_shared_buffer {
                     SHARED_BUFFER.get_or_init(|| shared_buffer);
-                }
-                Err(e) => {
-                    println!("Error opening shared texture: {e}")
+                } else {
+                    println!("Error opening shared texture: {:?}", maybe_shared_buffer)
                 }
             }
         }
     }
 
-    unsafe { present_function(this.as_raw(), sync_internal, flags) }
+    unsafe { present_function(this, sync_internal, flags) }
 }

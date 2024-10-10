@@ -12,7 +12,6 @@ use windows::{
     core::{s, PCSTR},
     Win32::{
         Foundation::{BOOL, HINSTANCE},
-        Graphics::Direct3D11::ID3D11Texture2D,
         System::{
             Console::AllocConsole,
             LibraryLoader::{DisableThreadLibraryCalls, GetModuleHandleA},
@@ -27,7 +26,7 @@ mod impls;
 
 pub trait RenderingAPI: Sized {
     type PresentFn: retour::Function;
-    type ResizeFn;
+    type ResizeFn: retour::Function;
 
     fn present_fn(&self) -> *const ();
 
@@ -51,8 +50,6 @@ enum Reason {
     DllProcessAttach,
     DllProcessDetach,
 }
-
-static SHARED_BUFFER: OnceLock<ID3D11Texture2D> = OnceLock::new();
 
 #[repr(transparent)]
 struct SharedMem(shared_memory::Shmem);
@@ -98,62 +95,65 @@ fn main(hinst_dll: HINSTANCE, reason: Reason) -> Result<(), Error> {
             DisableThreadLibraryCalls(hinst_dll)?;
         }
 
-        std::thread::spawn(|| {
-            const SOCKET_NAME: &str = r"\\.\pipe\sylvias_shared_handle.sock";
-
-            const OGL_DLL: PCSTR = s!("opengl32.dll");
-            const D3D9_DLL: PCSTR = s!("d3d9.dll");
-            const D3D11_DLL: PCSTR = s!("d3d11.dll");
-
-            let name = SOCKET_NAME.to_ns_name::<GenericNamespaced>().unwrap();
-
-            let mut try_connect = Stream::connect(name.clone());
-
-            let mut stream = loop {
-                match try_connect {
-                    Err(e) if e.kind() == ErrorKind::NotFound => {
-                        try_connect = Stream::connect(name.clone());
-                    }
-                    Err(e) => {
-                        println!("{e}");
-                        try_connect = Stream::connect(name.clone());
-                    }
-                    Ok(stream) => {
-                        break stream;
-                    }
-                }
-            };
-
-            stream.write_all(&std::process::id().to_le_bytes()).unwrap();
-            let mut handle = [0; 8];
-            stream.read_exact(&mut handle).unwrap();
-            let ptr = isize::from_le_bytes(handle);
-            SHARED_HANDLE.store(ptr as _, std::sync::atomic::Ordering::Relaxed);
-
-            let call = unsafe { GetModuleHandleA(OGL_DLL) }
-                .map_err(Error::from)
-                .and_then(dll_attach_rendering_api::<impls::OpenGLHooks>);
-            if let Err(e) = call {
-                println!("{e}");
-            }
-
-            let call = unsafe { GetModuleHandleA(D3D9_DLL) }
-                .map_err(Error::from)
-                .and_then(dll_attach_rendering_api::<impls::DX9Hooks>);
-            if let Err(e) = call {
-                println!("{e}");
-            }
-
-            let call = unsafe { GetModuleHandleA(D3D11_DLL) }
-                .map_err(Error::from)
-                .and_then(dll_attach_rendering_api::<impls::DX11Hooks>);
-            if let Err(e) = call {
-                println!("{e}");
-            }
-        });
+        std::thread::spawn(dll_attach);
     };
 
     Ok(())
+}
+
+fn dll_attach() {
+    const SOCKET_NAME: &str = r"\\.\pipe\sylvias_shared_handle.sock";
+
+    const OGL_DLL: PCSTR = s!("opengl32.dll");
+    const D3D9_DLL: PCSTR = s!("d3d9.dll");
+    const D3D11_DLL: PCSTR = s!("d3d11.dll");
+
+    let name = SOCKET_NAME.to_ns_name::<GenericNamespaced>().unwrap();
+
+    let mut try_connect = Stream::connect(name.clone());
+
+    let mut stream = loop {
+        match try_connect {
+            Err(e) if e.kind() == ErrorKind::NotFound => {
+                try_connect = Stream::connect(name.clone());
+            }
+            Err(e) => {
+                println!("{e}");
+                try_connect = Stream::connect(name.clone());
+            }
+            Ok(stream) => {
+                break stream;
+            }
+        }
+    };
+
+    let pid_buf = std::process::id().to_le_bytes();
+    stream.write_all(&pid_buf).unwrap();
+    let mut handle = [0; 8];
+    stream.read_exact(&mut handle).unwrap();
+    let ptr = isize::from_le_bytes(handle);
+    SHARED_HANDLE.store(ptr as _, std::sync::atomic::Ordering::Relaxed);
+
+    let call = unsafe { GetModuleHandleA(OGL_DLL) }
+        .map_err(Error::from)
+        .and_then(dll_attach_rendering_api::<impls::OpenGLHooks>);
+    if let Err(e) = call {
+        println!("{e}");
+    }
+
+    let call = unsafe { GetModuleHandleA(D3D9_DLL) }
+        .map_err(Error::from)
+        .and_then(dll_attach_rendering_api::<impls::DX9Hooks>);
+    if let Err(e) = call {
+        println!("{e}");
+    }
+
+    let call = unsafe { GetModuleHandleA(D3D11_DLL) }
+        .map_err(Error::from)
+        .and_then(dll_attach_rendering_api::<impls::DX11Hooks>);
+    if let Err(e) = call {
+        println!("{e}");
+    }
 }
 
 fn dll_attach_rendering_api<T>(module: HMODULE) -> Result<(), Error>
