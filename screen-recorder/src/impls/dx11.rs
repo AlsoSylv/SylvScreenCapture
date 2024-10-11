@@ -3,7 +3,7 @@ use crate::{RenderingAPI, SHARED_HANDLE, WAS_OPENGL_CALL};
 use retour::RawDetour;
 use std::ffi::c_void;
 use std::mem::transmute;
-use std::ptr::{null, null_mut, NonNull};
+use std::ptr::NonNull;
 use std::sync::atomic::Ordering;
 use std::sync::OnceLock;
 use windows::core::{s, Interface, HRESULT};
@@ -52,18 +52,18 @@ impl RenderingAPI for DX11Hooks {
 
     fn create(module: HMODULE) -> Result<Self, Error> {
         pub type D3D11CreateDeviceAndSwapChain = unsafe extern "system" fn(
-            param0: Option<IDXGIAdapter>,
+            Option<IDXGIAdapter>,
             D3D_DRIVER_TYPE,
             HMODULE,
-            param3: u32,
-            *const D3D_FEATURE_LEVEL,
+            u32,
+            Option<&D3D_FEATURE_LEVEL>,
             u32,
             u32,
-            *const DXGI_SWAP_CHAIN_DESC,
-            *mut Option<IDXGISwapChain>,
-            *mut Option<ID3D11Device>,
-            *mut D3D_FEATURE_LEVEL,
-            *mut Option<ID3D11DeviceContext>,
+            &DXGI_SWAP_CHAIN_DESC,
+            &mut Option<IDXGISwapChain>,
+            Option<&mut Option<ID3D11Device>>,
+            Option<&mut D3D_FEATURE_LEVEL>,
+            Option<&mut Option<ID3D11DeviceContext>>,
         ) -> HRESULT;
 
         let (window, window_class) = unsafe { super::create_window() }?;
@@ -101,26 +101,26 @@ impl RenderingAPI for DX11Hooks {
         let D3D11CreateDeviceAndSwapChain: D3D11CreateDeviceAndSwapChain =
             unsafe { transmute(create_device) };
 
-        unsafe {
-            let result = D3D11CreateDeviceAndSwapChain(
+        let result = unsafe {
+            D3D11CreateDeviceAndSwapChain(
                 None,
                 D3D_DRIVER_TYPE_HARDWARE,
                 HMODULE::default(),
                 0,
-                null(),
+                None,
                 0,
                 D3D11_SDK_VERSION,
                 &swap_chain_desc,
                 &mut swap_chain,
-                null_mut(),
-                null_mut(),
-                null_mut(),
-            );
-
-            if result.is_err() {
-                return Err(windows::core::Error::from_hresult(result).into());
-            }
+                None,
+                None,
+                None,
+            )
         };
+        
+        if result.is_err() {
+            return Err(windows::core::Error::from_hresult(result).into());
+        }
 
         assert!(swap_chain.is_some());
 

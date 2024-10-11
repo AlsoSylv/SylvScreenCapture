@@ -167,8 +167,9 @@ impl RenderingAPI for OpenGLHooks {
 
 unsafe extern "system" fn new_wgl_swap_buffers(un_named_1: HDC) -> BOOL {
     use glad_gl::gl;
+    use crate::WAS_OPENGL_CALL;
 
-    // WAS_OPENGL_CALL.store(true, std::sync::atomic::Ordering::SeqCst);
+    WAS_OPENGL_CALL.store(true, std::sync::atomic::Ordering::SeqCst);
 
     let handle = HANDLE(crate::SHARED_HANDLE.load(std::sync::atomic::Ordering::Relaxed));
 
