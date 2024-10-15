@@ -11,4 +11,6 @@ windows.workspace = true
 interprocess.workspace = true
 shared_memory.workspace = true
 glad-gl.workspace = true
+glad-vulkan.workspace = true
 retour = { version = "0.3.1" }
+png = "*"

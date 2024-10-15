@@ -1,4 +1,4 @@
-use std::{ffi::CString, mem::transmute, ptr::addr_of_mut, sync::OnceLock};
+use std::{mem::transmute, ptr::addr_of_mut, sync::OnceLock};
 
 use retour::RawDetour;
 use windows::{
@@ -99,19 +99,16 @@ impl RenderingAPI for OpenGLHooks {
 
         unsafe { wglMakeCurrent(dc, context).ok()? };
 
-        glad_gl::gl::load(|func_ptr| {
-            let c_string = CString::new(func_ptr).unwrap();
-            let cstr = PCSTR(c_string.as_ptr() as _);
-
+        glad_gl::gl::load(|func_name| {
+            debug_assert!(func_name.is_ascii());
+            let cast_fn = |func| func as _;
+            let cstr = PCSTR(func_name.as_ptr());
             let func_ptr = unsafe { wglGetProcAddress(cstr) };
 
-            if let Some(func_ptr) = func_ptr {
-                func_ptr as _
-            } else {
-                unsafe {
-                    GetProcAddress(module, cstr).map_or_else(|| std::ptr::null(), |func| func as _)
-                }
-            }
+            func_ptr.map_or_else(
+                || unsafe { GetProcAddress(module, cstr).map_or_else(std::ptr::null, cast_fn) },
+                cast_fn,
+            )
         });
 
         Ok(Self {
@@ -166,8 +163,8 @@ impl RenderingAPI for OpenGLHooks {
 }
 
 unsafe extern "system" fn new_wgl_swap_buffers(un_named_1: HDC) -> BOOL {
-    use glad_gl::gl;
     use crate::WAS_OPENGL_CALL;
+    use glad_gl::gl;
 
     WAS_OPENGL_CALL.store(true, std::sync::atomic::Ordering::SeqCst);
 

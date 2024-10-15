@@ -193,11 +193,13 @@ impl ApplicationHandler for App {
         let rgba_size = size_of::<u8>() * 4;
         let shared_memory_size = header_size + rgba_size * monitor_size;
 
-        let shared_mem = shared_memory::ShmemConf::new()
+        let mut shared_mem = shared_memory::ShmemConf::new()
             .os_id("SylvScreenShare")
             .size(shared_memory_size)
             .create()
             .unwrap();
+
+        shared_mem.set_owner(true);
 
         let state = Self {
             window: Some(window),
@@ -271,7 +273,9 @@ impl ApplicationHandler for App {
                             .default_width(150.0)
                             .show(ctx, |ui| ui.label("New Text here!!!"));
 
+                        unsafe { d3d11_ctx.Flush() };
                         unsafe { d3d11_ctx.CopyResource(&*new_texture, &*texture) };
+                        unsafe { d3d11_ctx.Flush() };
                         let mut mapped_surface = D3D11_MAPPED_SUBRESOURCE::default();
                         if let Err(e) = unsafe {
                             d3d11_ctx.Map(
@@ -301,6 +305,8 @@ impl ApplicationHandler for App {
                                 description.Width as usize * description.Height as usize * 4,
                             )
                         };
+
+                        println!("{:?}", &slice[0..4]);
 
                         let image =
                             if (description.Width as usize | description.Height as usize) == 0 {

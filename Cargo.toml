@@ -6,17 +6,12 @@ resolver = "2"
 interprocess = "2.2.1"
 shared_memory = "0.12.4"
 glad-gl = { path = "./glad-gl" }
+glad-vulkan = { path = "./glad-vulkan" }
 
 [workspace.dependencies.windows]
 version = "0.58.0"
 default-features = false
 features = [
-    "Graphics_DirectX_Direct3D11",
-    "Win32_Graphics_Dxgi",
-    "Win32_Graphics_Dxgi_Common",
-    "Win32_Graphics_Direct3D11",
-    "Win32_Graphics_OpenGL",
-    "Win32_System_WinRT_Direct3D11",
     "Win32_Graphics_Direct3D",
     "Win32_System_LibraryLoader",
     "Win32_System_SystemServices",
@@ -27,6 +22,13 @@ features = [
     "Win32_System_Memory",
     "Win32_System_Diagnostics_Debug",
     "Win32_System_Console",
-    "Win32_Graphics_Direct3D9",
     "Win32_System_ProcessStatus",
+    "Win32_Graphics_OpenGL",
+    "Win32_Graphics_Direct3D9",
+    "Win32_Graphics_Direct3D10",
+    "Win32_Graphics_Direct3D11",
+    "Graphics_DirectX_Direct3D11",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
+    "Win32_Graphics_Direct3D12",
 ]

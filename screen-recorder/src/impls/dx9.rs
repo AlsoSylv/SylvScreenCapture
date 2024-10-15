@@ -67,7 +67,11 @@ impl RenderingAPI for DX9Hooks {
         #[allow(non_snake_case)]
         let Direct3DCreate9: Direct3DCreate9 = unsafe { transmute(direct_3d_create9_ptr) };
 
-        let d3d9 = unsafe { Direct3DCreate9(D3D9b_SDK_VERSION) }.unwrap();
+        let Some(d3d9) = (unsafe { Direct3DCreate9(D3D9b_SDK_VERSION) }) else {
+            return Err(
+                windows::core::Error::from_hresult(windows::Win32::Foundation::E_FAIL).into(),
+            );
+        };
 
         let mut present_params = D3DPRESENT_PARAMETERS {
             BackBufferWidth: 100,

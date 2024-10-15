@@ -1,4 +1,5 @@
 [package]
+edition = "2015"
 name = "glad-gl"
 version = "2.0.8"
 authors = ["David Herberth <github@dav1d.de>"]

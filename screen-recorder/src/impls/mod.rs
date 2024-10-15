@@ -12,12 +12,13 @@ use windows::{
 
 use crate::error::Error;
 
-pub use dx11::DX11Hooks;
 pub use dx9::DX9Hooks;
+pub use dxgi_impls::dx10::DX10Hooks;
+pub use dxgi_impls::dx11::DX11Hooks;
 pub use gl::OpenGLHooks;
 
-mod dx11;
 mod dx9;
+mod dxgi_impls;
 mod gl;
 
 const WINDOW_CLASS_NAME: PCSTR = s!("dummy_window_for_swap_chain");
