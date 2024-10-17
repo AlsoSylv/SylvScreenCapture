@@ -146,17 +146,17 @@ impl RenderingAPI for DX11Hooks {
     }
 }
 
-pub(super) fn dx11_duplicate_hook(this: &IDXGISwapChain) {
+pub(super) fn dx11_duplicate_hook(this: &IDXGISwapChain) -> Result<(), windows::core::Error> {
     static SHARED_BUFFER: OnceLock<ID3D11Texture2D> = OnceLock::new();
 
-    let device: ID3D11Device = unsafe { this.GetDevice() }.unwrap();
+    let device: ID3D11Device = unsafe { this.GetDevice() }?;
     let device_1: ID3D11Device1 = device.cast().unwrap();
 
     if let Some(shared_buffer) = SHARED_BUFFER.get() {
         let context = unsafe { device.GetImmediateContext() }.unwrap();
         let back_buffer: ID3D11Texture2D = unsafe { this.GetBuffer(0) }.unwrap();
 
-        // // TODO: Find a better way of debugging
+        // TODO: Find a better way of debugging
         // {
         //     static DESCRIPTION: Once = Once::new();
         //     DESCRIPTION.call_once(|| {
@@ -169,6 +169,7 @@ pub(super) fn dx11_duplicate_hook(this: &IDXGISwapChain) {
 
         unsafe { context.CopyResource(shared_buffer, &back_buffer) };
     } else {
+        // This sucks, but I don't think there's a better way to handle it.
         let handle = NonNull::new(SHARED_HANDLE.load(Ordering::Relaxed));
         let handle = handle.map(|ptr| HANDLE(ptr.as_ptr()));
 
@@ -181,4 +182,6 @@ pub(super) fn dx11_duplicate_hook(this: &IDXGISwapChain) {
             }
         }
     }
+
+    Ok(())
 }

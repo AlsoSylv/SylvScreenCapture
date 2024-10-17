@@ -163,10 +163,13 @@ impl RenderingAPI for OpenGLHooks {
 }
 
 unsafe extern "system" fn new_wgl_swap_buffers(un_named_1: HDC) -> BOOL {
-    use crate::WAS_OPENGL_CALL;
     use glad_gl::gl;
 
-    WAS_OPENGL_CALL.store(true, std::sync::atomic::Ordering::SeqCst);
+    #[cfg(target_os = "windows")]
+    {
+        use super::dxgi_impls::WAS_OPENGL_CALL;
+        WAS_OPENGL_CALL.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
 
     let handle = HANDLE(crate::SHARED_HANDLE.load(std::sync::atomic::Ordering::Relaxed));
 
@@ -174,6 +177,7 @@ unsafe extern "system" fn new_wgl_swap_buffers(un_named_1: HDC) -> BOOL {
         let (mut memory_object, mut texture) = (0, 0);
 
         unsafe { gl::CreateMemoryObjectsEXT(1, addr_of_mut!(memory_object)) };
+        // TODO: This should be replaced with `ImportMemoryFd` on Linux
         unsafe {
             gl::ImportMemoryWin32HandleEXT(
                 memory_object,

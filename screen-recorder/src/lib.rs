@@ -4,7 +4,7 @@ use retour::{Function, RawDetour};
 use std::ffi::c_void;
 use std::io::{ErrorKind, Read, Write};
 use std::ptr::null_mut;
-use std::sync::atomic::{AtomicBool, AtomicPtr};
+use std::sync::atomic::AtomicPtr;
 use std::sync::OnceLock;
 use windows::Win32::Foundation::HMODULE;
 use windows::Win32::System::SystemServices;
@@ -51,6 +51,17 @@ enum Reason {
     DllProcessDetach,
 }
 
+// TODO: Implement a clearer shared memory layout
+/*
+    The ideal layout in my head is
+    struct SharedMemory {
+        shared_handle: AtomicU64,
+        dimensions: AtomicU64, (hi: width: u32, lo: height: u32)
+        api: AtomicU8,
+        flip: AtomicBool,
+        ignore_alpha: AtomicBool,
+    }
+*/
 #[repr(transparent)]
 struct SharedMem(shared_memory::Shmem);
 
@@ -58,9 +69,6 @@ unsafe impl Send for SharedMem {}
 unsafe impl Sync for SharedMem {}
 
 static SHARED_CPU_BUFFER: OnceLock<SharedMem> = OnceLock::new();
-
-pub static WAS_OPENGL_CALL: AtomicBool = AtomicBool::new(false);
-
 pub static SHARED_HANDLE: AtomicPtr<c_void> = AtomicPtr::new(null_mut());
 
 // Export this main as DllMain
@@ -109,6 +117,7 @@ fn dll_attach() {
     const D3D10_DLL: PCSTR = s!("d3d10.dll");
     const D3D11_DLL: PCSTR = s!("d3d11.dll");
 
+    // This is a list of APIs and their hooks, since all APIs need to be attempted to be hooked
     #[allow(unused)]
     const MODULES: &[(PCSTR, fn(HMODULE) -> Result<(), Error>)] = &[
         (OGL_DLL, dll_attach_rendering_api::<impls::OpenGLHooks>),
@@ -143,19 +152,19 @@ fn dll_attach() {
     let ptr = isize::from_le_bytes(handle);
     SHARED_HANDLE.store(ptr as _, std::sync::atomic::Ordering::Relaxed);
 
-    // let call = unsafe { GetModuleHandleA(OGL_DLL) }
-    //     .map_err(Error::from)
-    //     .and_then(dll_attach_rendering_api::<impls::OpenGLHooks>);
-    // if let Err(e) = call {
-    //     println!("{e}");
-    // }
+    let call = unsafe { GetModuleHandleA(OGL_DLL) }
+        .map_err(Error::from)
+        .and_then(dll_attach_rendering_api::<impls::OpenGLHooks>);
+    if let Err(e) = call {
+        println!("{e}");
+    }
 
-    // let call = unsafe { GetModuleHandleA(D3D9_DLL) }
-    //     .map_err(Error::from)
-    //     .and_then(dll_attach_rendering_api::<impls::DX9Hooks>);
-    // if let Err(e) = call {
-    //     println!("{e}");
-    // }
+    let call = unsafe { GetModuleHandleA(D3D9_DLL) }
+        .map_err(Error::from)
+        .and_then(dll_attach_rendering_api::<impls::DX9Hooks>);
+    if let Err(e) = call {
+        println!("{e}");
+    }
 
     let call = unsafe { GetModuleHandleA(D3D10_DLL) }
         .map_err(Error::from)
@@ -164,12 +173,12 @@ fn dll_attach() {
         println!("{e}");
     }
 
-    // let call = unsafe { GetModuleHandleA(D3D11_DLL) }
-    //     .map_err(Error::from)
-    //     .and_then(dll_attach_rendering_api::<impls::DX11Hooks>);
-    // if let Err(e) = call {
-    //     println!("{e}");
-    // }
+    let call = unsafe { GetModuleHandleA(D3D11_DLL) }
+        .map_err(Error::from)
+        .and_then(dll_attach_rendering_api::<impls::DX11Hooks>);
+    if let Err(e) = call {
+        println!("{e}");
+    }
 }
 
 fn dll_attach_rendering_api<T>(module: HMODULE) -> Result<(), Error>

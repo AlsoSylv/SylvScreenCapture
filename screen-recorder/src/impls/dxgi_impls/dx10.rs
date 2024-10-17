@@ -1,7 +1,4 @@
-use std::{
-    mem::transmute,
-    sync::OnceLock,
-};
+use std::{mem::transmute, sync::OnceLock};
 
 use retour::RawDetour;
 use windows::{
@@ -10,8 +7,8 @@ use windows::{
         Foundation::{BOOL, HMODULE, HWND},
         Graphics::{
             Direct3D10::{
-                ID3D10Device, ID3D10Device1, ID3D10Texture2D, D3D10_DRIVER_TYPE,
-                D3D10_DRIVER_TYPE_HARDWARE, D3D10_SDK_VERSION,
+                ID3D10Device, ID3D10Device1, D3D10_DRIVER_TYPE, D3D10_DRIVER_TYPE_HARDWARE,
+                D3D10_SDK_VERSION,
             },
             Dxgi::{
                 Common::{
@@ -146,45 +143,12 @@ impl RenderingAPI for DX10Hooks {
     }
 }
 
-pub(super) fn dx10_new_present_fn(this: &IDXGISwapChain) {
-    static SHARED_BUFFER: OnceLock<ID3D10Texture2D> = OnceLock::new();
+pub(super) fn dx10_new_present_fn(this: &IDXGISwapChain) -> Result<(), windows::core::Error> {
+    let _device: ID3D10Device = unsafe { this.GetDevice() }?;
+    /*
+        TODO: Implement the slow (CPU) path for D3D10 Capture, as D3D10 does not support NT handles
+        The alternative is scanning the loaded DLLs of the game, and making a shared texture that does not use NT handles
+    */
 
-    let _device: ID3D10Device = unsafe { this.GetDevice() }.unwrap();
-
-    if let Some(_buffer) = SHARED_BUFFER.get() {
-        // {
-        //     static ONCE: Once = Once::new();
-        //     ONCE.call_once(|| {
-        //         let mut desc = D3D10_TEXTURE2D_DESC::default();
-        //         unsafe { back_buffer.GetDesc(&mut desc) };
-        //         desc.Usage = windows::Win32::Graphics::Direct3D10::D3D10_USAGE_STAGING;
-        //         desc.BindFlags = 0;
-        //         desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ.0 as u32;
-        //         let new_texture = unsafe { device_10.CreateTexture2D(&desc, None) }.unwrap();
-        //         unsafe { device_10.Flush() };
-        //         unsafe { device_10.CopyResource(&new_texture, &back_buffer) };
-        //         unsafe { device_10.Flush() };
-        //         let mapped_resource = unsafe { new_texture.Map(0, D3D10_MAP_READ, 0) }.unwrap();
-        //         let slice = unsafe {
-        //             std::slice::from_raw_parts(mapped_resource.pData as *const u8, 1920 * 1080 * 4)
-        //         };
-        //         let path = { PathBuf::from("C:\\Users\\Cynthia\\Pictures\\screenshot.png") };
-        //         let file = BufWriter::new(std::fs::File::create(path).unwrap());
-        //         let mut encoder = png::Encoder::new(file, 1920, 1080);
-        //         encoder.set_color(png::ColorType::Rgba);
-        //         encoder.set_depth(png::BitDepth::Eight);
-        //         let mut writer = encoder.write_header().unwrap();
-        //         writer
-        //             .write_image_data(slice)
-        //             .and_then(|()| writer.finish())
-        //             .unwrap();
-        //         println!("Captured");
-        //         unsafe {
-        //             new_texture.Unmap(0);
-        //         }
-        //     });
-        // }
-    } else {
-        todo!("I need a shared handle that can work in DX10/9Ex, as well as the NT Handle for DX11/12")
-    }
+    Ok(())
 }

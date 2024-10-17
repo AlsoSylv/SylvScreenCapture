@@ -1,14 +1,20 @@
 use std::{
     ffi::c_void,
-    sync::{atomic::Ordering, OnceLock},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        OnceLock,
+    },
 };
 
 use windows::{
     core::{Interface, HRESULT},
-    Win32::Graphics::Dxgi::{Common::DXGI_FORMAT, IDXGISwapChain, DXGI_PRESENT},
+    Win32::{
+        Foundation::E_NOINTERFACE,
+        Graphics::Dxgi::{Common::DXGI_FORMAT, IDXGISwapChain, DXGI_PRESENT},
+    },
 };
 
-use crate::WAS_OPENGL_CALL;
+pub(super) static WAS_OPENGL_CALL: AtomicBool = AtomicBool::new(false);
 
 pub mod dx10;
 pub mod dx11;
@@ -33,8 +39,17 @@ unsafe extern "system" fn new_present_function(
     } else {
         let this = unsafe { IDXGISwapChain::from_raw(this) };
 
-        dx10::dx10_new_present_fn(&this);
-        dx11::dx11_duplicate_hook(&this);
+        if let Err(e) = dx10::dx10_new_present_fn(&this) {
+            if e.code() == E_NOINTERFACE {
+                if let Err(e) = dx11::dx11_duplicate_hook(&this) {
+                    if e.code() == E_NOINTERFACE {
+                        todo!("D3D12 Call here");
+                    }
+                }
+            } else {
+                println!("{e:?}")
+            }
+        }
     }
 
     unsafe { present_function(this, sync_internal, flags) }

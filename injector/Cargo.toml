@@ -9,8 +9,6 @@ winit = { version = "0.30.5", features = ["rwh_06"] }
 egui-directx11 = "0.6.0"
 egui = "0.29.1"
 egui-winit = "0.29.1"
-egui_demo_lib = "0.29.1"
-egui_extras = "0.29.1"
 shared_memory.workspace = true
 windows.workspace = true
 interprocess.workspace = true
