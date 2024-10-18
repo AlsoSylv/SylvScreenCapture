@@ -6,6 +6,7 @@
       <sourceFolder url="file://$MODULE_DIR$/injector/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/screen-recorder/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/glad-vulkan/src" isTestSource="false" />
       <excludeFolder url="file://$MODULE_DIR$/target" />
     </content>
     <orderEntry type="inheritedJdk" />

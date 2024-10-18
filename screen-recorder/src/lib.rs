@@ -25,8 +25,8 @@ mod error;
 mod impls;
 
 pub trait RenderingAPI: Sized {
-    type PresentFn: retour::Function;
-    type ResizeFn: retour::Function;
+    type PresentFn: Function;
+    type ResizeFn: Function;
 
     fn present_fn(&self) -> *const ();
 

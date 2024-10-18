@@ -4,21 +4,13 @@ use retour::RawDetour;
 use windows::{
     core::{s, Interface, HRESULT},
     Win32::{
-        Foundation::{BOOL, HMODULE, HWND},
+        Foundation::{HMODULE, HWND},
         Graphics::{
             Direct3D10::{
                 ID3D10Device, ID3D10Device1, D3D10_DRIVER_TYPE, D3D10_DRIVER_TYPE_HARDWARE,
                 D3D10_SDK_VERSION,
             },
-            Dxgi::{
-                Common::{
-                    DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_MODE_DESC, DXGI_MODE_SCALING_UNSPECIFIED,
-                    DXGI_MODE_SCANLINE_ORDER_UNSPECIFIED, DXGI_RATIONAL, DXGI_SAMPLE_DESC,
-                },
-                IDXGIAdapter, IDXGISwapChain, DXGI_SWAP_CHAIN_DESC,
-                DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH, DXGI_SWAP_EFFECT_DISCARD,
-                DXGI_USAGE_RENDER_TARGET_OUTPUT,
-            },
+            Dxgi::{IDXGIAdapter, IDXGISwapChain, DXGI_SWAP_CHAIN_DESC},
         },
         System::LibraryLoader::GetProcAddress,
         UI::WindowsAndMessaging::WNDCLASSEXA,
@@ -37,7 +29,6 @@ pub struct DX10Hooks {
 
 impl RenderingAPI for DX10Hooks {
     type PresentFn = super::PresentFn;
-
     type ResizeFn = super::ResizeFn;
 
     fn present_fn(&self) -> *const () {
@@ -48,7 +39,7 @@ impl RenderingAPI for DX10Hooks {
         self.swap_chain.vtable().ResizeBuffers as _
     }
 
-    fn create(module: HMODULE) -> Result<Self, crate::error::Error> {
+    fn create(module: HMODULE) -> Result<Self, Error> {
         pub type D3D10CreateDeviceAndSwapChain = unsafe extern "system" fn(
             Option<IDXGIAdapter>,
             D3D10_DRIVER_TYPE,
@@ -62,29 +53,7 @@ impl RenderingAPI for DX10Hooks {
 
         let (window, window_class) = unsafe { super::super::create_window() }?;
 
-        let mut swap_chain_desc = DXGI_SWAP_CHAIN_DESC {
-            BufferDesc: DXGI_MODE_DESC {
-                Width: 100,
-                Height: 100,
-                RefreshRate: DXGI_RATIONAL {
-                    Numerator: 60,
-                    Denominator: 1,
-                },
-                Format: DXGI_FORMAT_R8G8B8A8_UNORM,
-                ScanlineOrdering: DXGI_MODE_SCANLINE_ORDER_UNSPECIFIED,
-                Scaling: DXGI_MODE_SCALING_UNSPECIFIED,
-            },
-            SampleDesc: DXGI_SAMPLE_DESC {
-                Count: 1,
-                Quality: 0,
-            },
-            BufferUsage: DXGI_USAGE_RENDER_TARGET_OUTPUT,
-            BufferCount: 1,
-            OutputWindow: window,
-            Windowed: BOOL(true as i32),
-            SwapEffect: DXGI_SWAP_EFFECT_DISCARD,
-            Flags: DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH.0 as u32,
-        };
+        let mut swap_chain_desc = super::dxgi_swap_chain_desc(window);
 
         let mut swap_chain = None;
         let mut device = None;
@@ -138,7 +107,7 @@ impl RenderingAPI for DX10Hooks {
         super::new_present_function
     }
 
-    fn set_detour(detour: retour::RawDetour) {
+    fn set_detour(detour: RawDetour) {
         DETOUR.set(detour).unwrap()
     }
 }

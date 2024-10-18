@@ -36,15 +36,15 @@ impl RenderingAPI for OpenGLHooks {
     type ResizeFn = unsafe fn(i32, i32, i32, i32);
 
     fn present_fn(&self) -> *const () {
+        // Get the `wglSwapBuffers` function and return it as the `present` function
         const SWAP: PCSTR = s!("wglSwapBuffers");
-
         let func = unsafe { GetProcAddress(self.module, SWAP).unwrap() };
         func as _
     }
 
     fn resize_fn(&self) -> *const () {
+        // Get the `glViewport` function and return it as the `resize` function
         const VIEWPORT: PCSTR = s!("glViewport");
-
         let func = unsafe { GetProcAddress(self.module, VIEWPORT).unwrap() };
         func as _
     }
@@ -73,6 +73,7 @@ impl RenderingAPI for OpenGLHooks {
 
         unsafe { SetPixelFormat(dc, pixel_format_idx, &pixel_format)? };
 
+        // God cannot save me from my sins.
         type PROC = Option<unsafe extern "system" fn() -> isize>;
         type WglCreateContext = unsafe extern "system" fn(HDC) -> HGLRC;
         type WglMakeCurrent = unsafe extern "system" fn(HDC, HGLRC) -> BOOL;
@@ -99,10 +100,14 @@ impl RenderingAPI for OpenGLHooks {
 
         unsafe { wglMakeCurrent(dc, context).ok()? };
 
+        // Load all the GL function pointers from GLAD, this will let us use it later in the `present` hook
         glad_gl::gl::load(|func_name| {
+            // They are all ascii anyway
             debug_assert!(func_name.is_ascii());
+            let null_terminated =
+                std::ffi::CString::new(func_name).expect("There's no null in them");
             let cast_fn = |func| func as _;
-            let cstr = PCSTR(func_name.as_ptr());
+            let cstr = PCSTR(null_terminated.as_ptr() as _);
             let func_ptr = unsafe { wglGetProcAddress(cstr) };
 
             func_ptr.map_or_else(

@@ -38,15 +38,14 @@ pub struct DX9Hooks {
 
 impl RenderingAPI for DX9Hooks {
     type PresentFn = unsafe extern "system" fn(
-        *mut core::ffi::c_void,
+        *mut c_void,
         *const RECT,
         *const RECT,
         HWND,
         *const RGNDATA,
     ) -> HRESULT;
 
-    type ResizeFn =
-        unsafe extern "system" fn(*mut core::ffi::c_void, *const D3DVIEWPORT9) -> HRESULT;
+    type ResizeFn = unsafe extern "system" fn(*mut c_void, *const D3DVIEWPORT9) -> HRESULT;
 
     fn present_fn(&self) -> *const () {
         self.device.vtable().Present as _
@@ -140,7 +139,7 @@ impl RenderingAPI for DX9Hooks {
         new_dx9_present_function
     }
 
-    fn set_detour(detour: retour::RawDetour) {
+    fn set_detour(detour: RawDetour) {
         DETOUR.set(detour).unwrap()
     }
 }

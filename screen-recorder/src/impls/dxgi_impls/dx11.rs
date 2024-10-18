@@ -6,21 +6,14 @@ use std::ptr::NonNull;
 use std::sync::atomic::Ordering;
 use std::sync::OnceLock;
 use windows::core::{s, Interface, HRESULT};
-use windows::Win32::Foundation::{BOOL, HANDLE, HMODULE, HWND};
+use windows::Win32::Foundation::{HANDLE, HMODULE, HWND};
 use windows::Win32::Graphics::Direct3D::{
     D3D_DRIVER_TYPE, D3D_DRIVER_TYPE_HARDWARE, D3D_FEATURE_LEVEL,
 };
 use windows::Win32::Graphics::Direct3D11::{
     ID3D11Device, ID3D11Device1, ID3D11DeviceContext, ID3D11Texture2D, D3D11_SDK_VERSION,
 };
-use windows::Win32::Graphics::Dxgi::Common::{
-    DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_MODE_DESC, DXGI_MODE_SCALING_UNSPECIFIED,
-    DXGI_MODE_SCANLINE_ORDER_UNSPECIFIED, DXGI_RATIONAL, DXGI_SAMPLE_DESC,
-};
-use windows::Win32::Graphics::Dxgi::{
-    IDXGIAdapter, IDXGISwapChain, DXGI_SWAP_CHAIN_DESC, DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH,
-    DXGI_SWAP_EFFECT_DISCARD, DXGI_USAGE_RENDER_TARGET_OUTPUT,
-};
+use windows::Win32::Graphics::Dxgi::{IDXGIAdapter, IDXGISwapChain, DXGI_SWAP_CHAIN_DESC};
 use windows::Win32::System::LibraryLoader::GetProcAddress;
 use windows::Win32::UI::WindowsAndMessaging::WNDCLASSEXA;
 
@@ -62,29 +55,7 @@ impl RenderingAPI for DX11Hooks {
 
         let (window, window_class) = unsafe { super::super::create_window() }?;
 
-        let swap_chain_desc = DXGI_SWAP_CHAIN_DESC {
-            BufferDesc: DXGI_MODE_DESC {
-                Width: 100,
-                Height: 100,
-                RefreshRate: DXGI_RATIONAL {
-                    Numerator: 60,
-                    Denominator: 1,
-                },
-                Format: DXGI_FORMAT_R8G8B8A8_UNORM,
-                ScanlineOrdering: DXGI_MODE_SCANLINE_ORDER_UNSPECIFIED,
-                Scaling: DXGI_MODE_SCALING_UNSPECIFIED,
-            },
-            SampleDesc: DXGI_SAMPLE_DESC {
-                Count: 1,
-                Quality: 0,
-            },
-            BufferUsage: DXGI_USAGE_RENDER_TARGET_OUTPUT,
-            BufferCount: 1,
-            OutputWindow: window,
-            Windowed: BOOL(true as i32),
-            SwapEffect: DXGI_SWAP_EFFECT_DISCARD,
-            Flags: DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH.0 as u32,
-        };
+        let swap_chain_desc = super::dxgi_swap_chain_desc(window);
 
         let mut swap_chain = None;
 
@@ -141,7 +112,7 @@ impl RenderingAPI for DX11Hooks {
         super::new_present_function
     }
 
-    fn set_detour(detour: retour::RawDetour) {
+    fn set_detour(detour: RawDetour) {
         DETOUR.set(detour).unwrap()
     }
 }
@@ -150,11 +121,14 @@ pub(super) fn dx11_duplicate_hook(this: &IDXGISwapChain) -> Result<(), windows::
     static SHARED_BUFFER: OnceLock<ID3D11Texture2D> = OnceLock::new();
 
     let device: ID3D11Device = unsafe { this.GetDevice() }?;
-    let device_1: ID3D11Device1 = device.cast().unwrap();
+    let device_1: ID3D11Device1 = device
+        .cast()
+        .expect("Casting `ID3D11Device` to `ID3D11Device1` should never fail");
 
     if let Some(shared_buffer) = SHARED_BUFFER.get() {
-        let context = unsafe { device.GetImmediateContext() }.unwrap();
-        let back_buffer: ID3D11Texture2D = unsafe { this.GetBuffer(0) }.unwrap();
+        let context = unsafe { device.GetImmediateContext() }.expect("This is not null");
+        let back_buffer: ID3D11Texture2D =
+            unsafe { this.GetBuffer(0) }.expect("There's always a back buffer");
 
         // TODO: Find a better way of debugging
         // {
