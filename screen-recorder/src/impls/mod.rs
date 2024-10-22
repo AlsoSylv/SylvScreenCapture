@@ -24,15 +24,14 @@ mod gl;
 const WINDOW_CLASS_NAME: PCSTR = s!("dummy_window_for_swap_chain");
 
 unsafe fn create_window() -> Result<(HWND, WNDCLASSEXA), Error> {
-    let window_class = {
-        let mut window_class = WNDCLASSEXA::default();
-        window_class.cbSize = size_of::<WNDCLASSEXA>() as u32;
-        window_class.style = CS_HREDRAW | CS_VREDRAW;
-        window_class.lpfnWndProc = Some(def_window_pro_a);
-        window_class.hInstance = unsafe { GetModuleHandleA(None)?.into() };
-        window_class.lpszClassName = WINDOW_CLASS_NAME;
-        window_class.lpszMenuName = PCSTR::null();
-        window_class
+    let window_class = WNDCLASSEXA {
+        cbSize: size_of::<WNDCLASSEXA>() as u32,
+        style: CS_HREDRAW | CS_VREDRAW,
+        lpfnWndProc: Some(def_window_pro_a),
+        hInstance: unsafe { GetModuleHandleA(None)?.into() },
+        lpszClassName: WINDOW_CLASS_NAME,
+        lpszMenuName: PCSTR::null(),
+        ..Default::default()
     };
 
     let registered_window_class = unsafe { RegisterClassExA(&window_class) };
@@ -73,6 +72,8 @@ unsafe fn delete_window(window: HWND, window_class: WNDCLASSEXA) -> Result<(), E
 }
 
 // Workaround
+// The windows crate `DefWindowProcA` is not an extern "system" function,
+// So it cannot be passed to `WNDCLASSEXA` and needs to be put in a wrapper to do so
 unsafe extern "system" fn def_window_pro_a(
     hwnd: HWND,
     msg: u32,

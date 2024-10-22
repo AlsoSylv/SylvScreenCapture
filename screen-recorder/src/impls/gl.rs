@@ -4,7 +4,7 @@ use retour::RawDetour;
 use windows::{
     core::{s, PCSTR},
     Win32::{
-        Foundation::{BOOL, HANDLE, HMODULE, HWND},
+        Foundation::{BOOL, HMODULE, HWND},
         Graphics::{
             Gdi::{GetDC, HDC},
             OpenGL::{
@@ -17,7 +17,7 @@ use windows::{
     },
 };
 
-use crate::RenderingAPI;
+use crate::{NewSharedMemoryHeader, RenderingAPI};
 
 static OPENGL_SWAP_BUFFERS: OnceLock<<OpenGLHooks as RenderingAPI>::PresentFn> = OnceLock::new();
 
@@ -57,16 +57,15 @@ impl RenderingAPI for OpenGLHooks {
 
         let dc = unsafe { GetDC(window) };
 
-        let pixel_format = {
-            let mut pixel_format = PIXELFORMATDESCRIPTOR::default();
-            pixel_format.nSize = size_of::<PIXELFORMATDESCRIPTOR>() as u16;
-            pixel_format.nVersion = 1;
-            pixel_format.dwFlags = PFD_DRAW_TO_WINDOW | PFD_SUPPORT_OPENGL | PFD_DOUBLEBUFFER;
-            pixel_format.iPixelType = PFD_TYPE_RGBA;
-            pixel_format.cDepthBits = 24;
-            pixel_format.cStencilBits = 8;
-            pixel_format.iLayerType = PFD_MAIN_PLANE.0 as u8;
-            pixel_format
+        let pixel_format = PIXELFORMATDESCRIPTOR {
+            nSize: size_of::<PIXELFORMATDESCRIPTOR>() as u16,
+            nVersion: 1,
+            dwFlags: PFD_DRAW_TO_WINDOW | PFD_SUPPORT_OPENGL | PFD_DOUBLEBUFFER,
+            iPixelType: PFD_TYPE_RGBA,
+            cDepthBits: 24,
+            cStencilBits: 8,
+            iLayerType: PFD_MAIN_PLANE.0 as u8,
+            ..Default::default()
         };
 
         let pixel_format_idx = unsafe { ChoosePixelFormat(dc, &pixel_format) };
@@ -74,10 +73,10 @@ impl RenderingAPI for OpenGLHooks {
         unsafe { SetPixelFormat(dc, pixel_format_idx, &pixel_format)? };
 
         // God cannot save me from my sins.
-        type PROC = Option<unsafe extern "system" fn() -> isize>;
+        type Proc = Option<unsafe extern "system" fn() -> isize>;
         type WglCreateContext = unsafe extern "system" fn(HDC) -> HGLRC;
         type WglMakeCurrent = unsafe extern "system" fn(HDC, HGLRC) -> BOOL;
-        type WglGetProcAddress = unsafe extern "system" fn(PCSTR) -> PROC;
+        type WglGetProcAddress = unsafe extern "system" fn(PCSTR) -> Proc;
 
         let wgl_create_context_ptr =
             unsafe { GetProcAddress(module, s!("wglCreateContext")).unwrap() };
@@ -176,9 +175,13 @@ unsafe extern "system" fn new_wgl_swap_buffers(un_named_1: HDC) -> BOOL {
         WAS_OPENGL_CALL.store(true, std::sync::atomic::Ordering::SeqCst);
     }
 
-    let handle = HANDLE(crate::SHARED_HANDLE.load(std::sync::atomic::Ordering::Relaxed));
+    let header = crate::SHARED_CPU_BUFFER.get().unwrap().0.as_ptr() as *mut NewSharedMemoryHeader;
+    unsafe {
+        (*header).set_api(crate::InUseRenderingAPI::Ogl);
+    }
+    let handle = unsafe { (*header).get_shared_handle() };
 
-    if !handle.is_invalid() {
+    if let Some(handle) = handle {
         let (mut memory_object, mut texture) = (0, 0);
 
         unsafe { gl::CreateMemoryObjectsEXT(1, addr_of_mut!(memory_object)) };

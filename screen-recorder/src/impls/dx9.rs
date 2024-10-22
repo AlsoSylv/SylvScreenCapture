@@ -28,7 +28,7 @@ use windows::{
 static DX9_PRESENT: OnceLock<<DX9Hooks as RenderingAPI>::PresentFn> = OnceLock::new();
 static DETOUR: OnceLock<RawDetour> = OnceLock::new();
 
-use crate::{RenderingAPI, SHARED_CPU_BUFFER};
+use crate::{NewSharedMemoryHeader, RenderingAPI, SHARED_CPU_BUFFER};
 
 pub struct DX9Hooks {
     window: HWND,
@@ -104,14 +104,6 @@ impl RenderingAPI for DX9Hooks {
 
         let device = device.unwrap();
 
-        let shared_buffer = shared_memory::ShmemConf::new()
-            .os_id("SylvScreenShare")
-            .size(size_of::<u32>() * 2 + size_of::<u32>() * 1920 * 1080)
-            .open()
-            .unwrap();
-
-        SHARED_CPU_BUFFER.get_or_init(|| crate::SharedMem(shared_buffer));
-
         Ok(Self {
             window,
             window_class,
@@ -144,6 +136,14 @@ impl RenderingAPI for DX9Hooks {
     }
 }
 
+#[repr(C)]
+struct BGRA {
+    b: u8,
+    g: u8,
+    r: u8,
+    a: u8,
+}
+
 unsafe extern "system" fn new_dx9_present_function(
     this: *mut c_void,
     src_rect: *const RECT,
@@ -154,23 +154,23 @@ unsafe extern "system" fn new_dx9_present_function(
     let this = unsafe { IDirect3DDevice9::from_raw(this) };
 
     if let Some(buffer) = SHARED_CPU_BUFFER.get() {
-        let buffer_ptr = buffer.0.as_ptr();
+        let shared_memory_ptr = buffer.0.as_ptr();
+        let header = unsafe { &*(shared_memory_ptr as *mut NewSharedMemoryHeader) };
 
         let back_buffer = unsafe { this.GetBackBuffer(0, 0, D3DBACKBUFFER_TYPE_MONO).unwrap() };
-
         let mut desc = D3DSURFACE_DESC::default();
-
         unsafe { back_buffer.GetDesc(&mut desc).unwrap() };
 
-        let width = desc.Width;
-        let height = desc.Height;
+        let buffer_width = desc.Width;
+        let buffer_width_usize = buffer_width as usize;
+        let buffer_height = desc.Height;
 
         let mut out_surf = None;
 
         unsafe {
             this.CreateOffscreenPlainSurface(
-                width,
-                height,
+                buffer_width,
+                buffer_height,
                 desc.Format,
                 D3DPOOL_SYSTEMMEM,
                 &mut out_surf,
@@ -192,39 +192,50 @@ unsafe extern "system" fn new_dx9_present_function(
                 .unwrap();
         }
 
-        let step_by = locked_rect.Pitch as usize * height as usize;
+        // The pitch is messured in bytes, so we need to divide by the size of BGRA
+        let pitch = locked_rect.Pitch as usize / size_of::<BGRA>();
+        let step_by = pitch * buffer_height as usize;
 
+        {
+            let (header_width, header_height) = header.get_width_and_height();
+            assert!(header_width >= buffer_width, "Assert failed! Width of game buffer was larger than the capture buffer. Game buffer: {buffer_width}, Capture buffer: {header_width}");
+            assert!(header_height >= buffer_height, "Assert failed! The number of rows in the game buffer was greater than the capture buffer. Game buffer: {buffer_height}, Capture buffer: {header_height}");
+        }
+
+        // SAFETY: The length of the buffer is equal to the pitch (padding) * the height * width
         let slice = unsafe {
             std::slice::from_raw_parts_mut(
-                locked_rect.pBits.cast::<u8>(),
-                step_by * width as usize * 4,
+                locked_rect.pBits.cast::<BGRA>(),
+                step_by * buffer_width_usize,
             )
         };
 
-        let width_bytes = width.to_le_bytes();
-        let height_bytes = height.to_le_bytes();
-        unsafe {
-            buffer_ptr.copy_from(width_bytes.as_ptr(), 4);
-        }
-        unsafe {
-            buffer_ptr.add(4).copy_from(height_bytes.as_ptr(), 4);
-        }
+        const HEADER_SIZE: usize = size_of::<NewSharedMemoryHeader>();
 
-        let buffer_ptr = unsafe { buffer_ptr.add(size_of::<u32>() * 2) };
-        for y in 0..desc.Height as usize {
-            let location = locked_rect.Pitch as usize * y;
-            let slice = &mut slice[location..(location + width as usize * 4)];
+        header.set_width_and_height(buffer_width, buffer_height);
+        header.set_api(crate::InUseRenderingAPI::Dx9);
+        // SAFETY: The buffer allocated is after the header, but this will change in the future
+        let buffer_ptr_head = unsafe { shared_memory_ptr.add(HEADER_SIZE) as *mut BGRA };
+        for y in 0..buffer_height as usize {
+            // When reading a DX9 mapped resource, it has a location inside the offset (in bytes), so that is calculated here
+            let location = pitch * y;
+            let slice = &mut slice[location..(location + buffer_width_usize)];
 
-            // TODO: Move this to the parent process?
+            // TODO: Ignore alpha in main process.
             // Simple way to encode the BGRA chunk to RGBA
-            slice.chunks_mut(4).for_each(|slice| {
-                assert_eq!(slice.len(), 4);
-                slice.swap(0, 2);
-                slice[3] = 255;
-            });
+            for bgra in slice.iter_mut() {
+                let r = bgra.r;
+                bgra.a = 255;
+                bgra.r = bgra.b;
+                bgra.b = r;
+            }
 
-            let buffer_ptr = unsafe { buffer_ptr.add(4 * y * width as usize) };
-            unsafe { buffer_ptr.copy_from(slice.as_ptr(), slice.len()) };
+            // SAFETY: The length of the buffer has to be at least the length of the frame buffer, and this should be asssured in the resize function
+            // The Y here is the row of the buffer we're in
+            // Since this is indexed as a 2D array, but an entire row is filled at a time, X is always 0
+            let buffer_ptr = unsafe { buffer_ptr_head.add(0 + y * buffer_width_usize) };
+            // SAFETY: This is copying the number of bytes equivalent less than or equal to the capture buffer length
+            unsafe { buffer_ptr.copy_from(slice.as_ptr(), buffer_width_usize) };
         }
 
         unsafe { out_surf.UnlockRect().unwrap() }

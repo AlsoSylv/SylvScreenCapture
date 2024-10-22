@@ -1,5 +1,5 @@
 use crate::error::Error;
-use crate::{RenderingAPI, SHARED_HANDLE};
+use crate::{NewSharedMemoryHeader, RenderingAPI};
 use retour::RawDetour;
 use std::mem::transmute;
 use std::ptr::NonNull;
@@ -144,7 +144,10 @@ pub(super) fn dx11_duplicate_hook(this: &IDXGISwapChain) -> Result<(), windows::
         unsafe { context.CopyResource(shared_buffer, &back_buffer) };
     } else {
         // This sucks, but I don't think there's a better way to handle it.
-        let handle = NonNull::new(SHARED_HANDLE.load(Ordering::Relaxed));
+        let header =
+            crate::SHARED_CPU_BUFFER.get().unwrap().0.as_ptr() as *mut NewSharedMemoryHeader;
+        let header = unsafe { &*header };
+        let handle = NonNull::new(header.shared_handle.load(Ordering::Relaxed));
         let handle = handle.map(|ptr| HANDLE(ptr.as_ptr()));
 
         if let Some(handle) = handle {
