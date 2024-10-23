@@ -82,6 +82,8 @@ struct D3D11State {
 
 impl ApplicationHandler for App {
     fn resumed(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
+        let mut textures = Vec::new();
+
         let system = System::new_with_specifics(
             RefreshKind::new().with_processes(ProcessRefreshKind::new()),
         );
@@ -200,10 +202,6 @@ impl ApplicationHandler for App {
 
         let (dx10_down_texture, dx11_up_texture) =
             inject(process, &device, &shared_mem).expect("AAA");
-
-        // TODO: Textures need to be managed by the PID they are made for
-        let mut textures = Vec::new();
-
         textures.push((process.pid().as_u32(), dx10_down_texture, dx11_up_texture));
 
         let state = Self {
@@ -268,7 +266,7 @@ impl ApplicationHandler for App {
             }
             WindowEvent::RedrawRequested => {
                 if let Some(render_target) = &d3d11_state.render_target {
-                    let input = egui_winit.take_egui_input(&window);
+                    let input = egui_winit.take_egui_input(window);
                     let output = egui_ctx.run(input, |ctx| {
                         egui::SidePanel::new(egui::panel::Side::Left, "new_side_panel")
                             .frame(Frame::none().fill(Color32::WHITE))
@@ -292,7 +290,7 @@ impl ApplicationHandler for App {
                         unsafe {
                             d3d11_state
                                 .ctx
-                                .CopyResource(&*new_texture, &*in_use_texture)
+                                .CopyResource(&*new_texture, in_use_texture)
                         };
                         let mut mapped_surface = D3D11_MAPPED_SUBRESOURCE::default();
                         if let Err(e) = unsafe {
@@ -319,23 +317,21 @@ impl ApplicationHandler for App {
 
                         let image = if (width as usize | height as usize) == 0 {
                             ColorImage::from_rgba_unmultiplied([1, 1], &[0, 0, 0, 255])
-                        } else {
-                            if header.ignore_alpha() {
-                                ColorImage {
-                                    size: [width as usize, height as usize],
-                                    pixels: slice
-                                        .chunks(4)
-                                        .map(|slice| {
-                                            Color32::from_rgb(slice[2], slice[1], slice[0])
-                                        })
-                                        .collect(),
-                                }
-                            } else {
-                                ColorImage::from_rgba_unmultiplied(
-                                    [width as usize, height as usize],
-                                    slice,
-                                )
+                        } else if header.ignore_alpha() {
+                            ColorImage {
+                                size: [width as usize, height as usize],
+                                pixels: slice
+                                    .chunks(4)
+                                    .map(|slice| {
+                                        Color32::from_rgb(slice[2], slice[1], slice[0])
+                                    })
+                                    .collect(),
                             }
+                        } else {
+                            ColorImage::from_rgba_unmultiplied(
+                                [width as usize, height as usize],
+                                slice,
+                            )
                         };
 
                         texture_handle.set(image, TextureOptions::default());
@@ -350,7 +346,7 @@ impl ApplicationHandler for App {
 
                     let (render_output, platform_output, _) = egui_directx11::split_output(output);
 
-                    egui_winit.handle_platform_output(&window, platform_output);
+                    egui_winit.handle_platform_output(window, platform_output);
 
                     unsafe {
                         d3d11_state
@@ -361,8 +357,8 @@ impl ApplicationHandler for App {
                     egui_renderer
                         .render(
                             &d3d11_state.ctx,
-                            &render_target,
-                            &egui_ctx,
+                            render_target,
+                            egui_ctx,
                             render_output,
                             window.scale_factor() as _,
                         )
@@ -391,7 +387,7 @@ fn inject(
 ) -> Result<(Option<ID3D11Texture2D>, Option<ID3D11Texture2D>), ()> {
     const SHARED_RIGHTS: u32 = DXGI_SHARED_RESOURCE_READ.0 | DXGI_SHARED_RESOURCE_WRITE.0;
 
-    let target_process = process_ext::Process::new_with_system(&process);
+    let target_process = process_ext::Process::new_with_system(process);
     let mut nt_handle = false;
     let mut handle = false;
 

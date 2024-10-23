@@ -95,18 +95,17 @@ impl Process {
         let slice: &mut [HMODULE] = if needed > LEN * size_of::<HMODULE>() {
             &mut Vec::with_capacity(needed)
         } else {
-            &mut [HMODULE(null_mut()); LEN as usize]
+            &mut [HMODULE(null_mut()); LEN]
         };
 
         let slice_ptr = slice.as_mut_ptr();
-        let slice_len = slice.len();
         let mut new_needed = 0;
 
         unsafe {
             EnumProcessModulesEx(
                 self.handle,
                 slice_ptr,
-                (slice_len * size_of::<HMODULE>()) as u32,
+                size_of_val(slice) as u32,
                 &mut new_needed,
                 ENUM_PROCESS_MODULES_EX_FLAGS(0),
             )?
@@ -117,7 +116,7 @@ impl Process {
         let len = new_needed as usize / size_of::<HMODULE>();
         slice[0..len]
             .iter()
-            .map(|module| {
+            .try_for_each(|module| {
                 let mut name_bfr = [0; MAX_PATH as usize];
                 let len = unsafe { GetModuleFileNameExW(self.handle, *module, &mut name_bfr) };
 
@@ -133,7 +132,6 @@ impl Process {
                     Ok(())
                 }
             })
-            .collect()
     }
 
     #[allow(unused)]
@@ -208,12 +206,14 @@ impl Process {
             )?;
         }
 
+        let load_library_ptr: unsafe extern "system" fn(*mut std::ffi::c_void) -> u32 = unsafe { std::mem::transmute(load_library_ptr) };
+
         unsafe {
             CreateRemoteThread(
                 self.handle,
                 None,
                 0,
-                Some(std::mem::transmute(load_library_ptr)),
+                Some(load_library_ptr),
                 Some(virtual_alloc),
                 0,
                 None,

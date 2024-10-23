@@ -60,10 +60,18 @@ impl Shmem {
         unsafe { &*self.header_ptr() }
     }
 
-    pub fn buffer(&self) -> &mut [u8] {
-        let ptr = unsafe { self.inner.as_ptr().add(HEADER_SIZE) };
+    pub fn buffer(&self) -> &[u8] {
+        let ptr = self.buffer_ptr();
 
-        unsafe { std::slice::from_raw_parts_mut(ptr, self.inner.len() - HEADER_SIZE) }
+        unsafe { std::slice::from_raw_parts(ptr, self.buffer_size()) }
+    }
+
+    pub fn buffer_ptr(&self) -> *mut u8 {
+        unsafe { self.inner.as_ptr().add(HEADER_SIZE) }
+    }
+
+    pub fn buffer_size(&self) -> usize {
+        self.inner.len() - HEADER_SIZE
     }
 
     pub fn set_owner(&mut self) {
@@ -184,10 +192,9 @@ impl SharedMemoryHeader {
     }
 
     pub fn set_api(&self, api: RenderingAPI) {
-        let api = self
+        self
             .api
             .store(api as u8, std::sync::atomic::Ordering::SeqCst);
-        api.try_into().unwrap()
     }
 
     pub fn flip(&self) -> bool {
