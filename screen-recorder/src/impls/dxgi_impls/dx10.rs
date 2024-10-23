@@ -1,14 +1,15 @@
 use std::{mem::transmute, sync::OnceLock};
 
 use retour::RawDetour;
+use shmem::SharedMemoryHeader;
 use windows::{
     core::{s, Interface, HRESULT},
     Win32::{
         Foundation::{HMODULE, HWND},
         Graphics::{
             Direct3D10::{
-                ID3D10Device, ID3D10Device1, D3D10_DRIVER_TYPE, D3D10_DRIVER_TYPE_HARDWARE,
-                D3D10_SDK_VERSION,
+                ID3D10Device, ID3D10Device1, ID3D10Texture2D, D3D10_DRIVER_TYPE,
+                D3D10_DRIVER_TYPE_HARDWARE, D3D10_SDK_VERSION,
             },
             Dxgi::{IDXGIAdapter, IDXGISwapChain, DXGI_SWAP_CHAIN_DESC},
         },
@@ -112,12 +113,34 @@ impl RenderingAPI for DX10Hooks {
     }
 }
 
-pub(super) fn dx10_new_present_fn(this: &IDXGISwapChain) -> Result<(), windows::core::Error> {
-    let _device: ID3D10Device = unsafe { this.GetDevice() }?;
-    /*
-        TODO: Implement the slow (CPU) path for D3D10 Capture, as D3D10 does not support NT handles
-        The alternative is scanning the loaded DLLs of the game, and making a shared texture that does not use NT handles
-    */
+pub(super) fn dx10_new_present_fn(
+    this: &IDXGISwapChain,
+    header: &SharedMemoryHeader,
+) -> Result<(), windows::core::Error> {
+    static SHARED_BUFFER: OnceLock<ID3D10Texture2D> = OnceLock::new();
+
+    let device: ID3D10Device = unsafe { this.GetDevice() }?;
+    header.set_api(shmem::RenderingAPI::Dx10);
+
+    if let Some(shared_buffer) = SHARED_BUFFER.get() {
+        let back_buffer: ID3D10Texture2D =
+            unsafe { this.GetBuffer(0) }.expect("There's always a back buffer");
+
+        unsafe { device.CopyResource(shared_buffer, &back_buffer) };
+    } else {
+        let handle = header.get_shared_handle();
+        if let Some(handle) = handle {
+            let mut texture = unsafe { std::mem::zeroed() };
+            if let Err(e) = unsafe {
+                device.OpenSharedResource(handle, &ID3D10Texture2D::IID, Some(&mut texture))
+            } {
+                println!("{e}");
+                return Ok(());
+            };
+            let texture = unsafe { ID3D10Texture2D::from_raw(texture) };
+            SHARED_BUFFER.get_or_init(|| texture);
+        }
+    }
 
     Ok(())
 }

@@ -43,18 +43,20 @@ unsafe extern "system" fn new_present_function(
     const GET_PRESENT_ERROR: &str = "The trampoline was set before this was ever called.";
     let present_function = *DXGI_SWAP_BUFFER.get().expect(GET_PRESENT_ERROR);
 
-    // Because drivers inject GL calls (
+    // In case the driver or app are using DXGI presentation for OpenGL (though I'd rather do this through a DX device)
     if WAS_OPENGL_CALL.load(Ordering::SeqCst) {
         WAS_OPENGL_CALL.store(false, Ordering::SeqCst);
     } else {
         // This is used in every capture (besides GL)
         let this = unsafe { IDXGISwapChain::from_raw(this) };
+        // This sucks, but I don't think there's a better way to handle it.
+        let header = crate::SHARED_CPU_BUFFER.get().unwrap().0.header();
 
         // If this returns an `E_NOINTERFACE` error, that means that it is newer than DX10
-        if let Err(e) = dx10::dx10_new_present_fn(&this) {
+        if let Err(e) = dx10::dx10_new_present_fn(&this, header) {
             if e.code() == E_NOINTERFACE {
                 // Repeat above but for DX11
-                if let Err(e) = dx11::dx11_duplicate_hook(&this) {
+                if let Err(e) = dx11::dx11_duplicate_hook(&this, header) {
                     if e.code() == E_NOINTERFACE {
                         todo!("D3D12 Call here");
                     }

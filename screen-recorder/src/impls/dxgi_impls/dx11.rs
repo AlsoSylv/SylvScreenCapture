@@ -1,12 +1,11 @@
 use crate::error::Error;
-use crate::{NewSharedMemoryHeader, RenderingAPI};
+use crate::RenderingAPI;
 use retour::RawDetour;
+use shmem::SharedMemoryHeader;
 use std::mem::transmute;
-use std::ptr::NonNull;
-use std::sync::atomic::Ordering;
 use std::sync::OnceLock;
 use windows::core::{s, Interface, HRESULT};
-use windows::Win32::Foundation::{HANDLE, HMODULE, HWND};
+use windows::Win32::Foundation::{HMODULE, HWND};
 use windows::Win32::Graphics::Direct3D::{
     D3D_DRIVER_TYPE, D3D_DRIVER_TYPE_HARDWARE, D3D_FEATURE_LEVEL,
 };
@@ -117,13 +116,18 @@ impl RenderingAPI for DX11Hooks {
     }
 }
 
-pub(super) fn dx11_duplicate_hook(this: &IDXGISwapChain) -> Result<(), windows::core::Error> {
+pub(super) fn dx11_duplicate_hook(
+    this: &IDXGISwapChain,
+    header: &SharedMemoryHeader,
+) -> Result<(), windows::core::Error> {
     static SHARED_BUFFER: OnceLock<ID3D11Texture2D> = OnceLock::new();
 
     let device: ID3D11Device = unsafe { this.GetDevice() }?;
     let device_1: ID3D11Device1 = device
         .cast()
         .expect("Casting `ID3D11Device` to `ID3D11Device1` should never fail");
+
+    header.set_api(shmem::RenderingAPI::Dx11);
 
     if let Some(shared_buffer) = SHARED_BUFFER.get() {
         let context = unsafe { device.GetImmediateContext() }.expect("This is not null");
@@ -143,12 +147,7 @@ pub(super) fn dx11_duplicate_hook(this: &IDXGISwapChain) -> Result<(), windows::
 
         unsafe { context.CopyResource(shared_buffer, &back_buffer) };
     } else {
-        // This sucks, but I don't think there's a better way to handle it.
-        let header =
-            crate::SHARED_CPU_BUFFER.get().unwrap().0.as_ptr() as *mut NewSharedMemoryHeader;
-        let header = unsafe { &*header };
-        let handle = NonNull::new(header.shared_handle.load(Ordering::Relaxed));
-        let handle = handle.map(|ptr| HANDLE(ptr.as_ptr()));
+        let handle = header.get_nt_shared_handle();
 
         if let Some(handle) = handle {
             let maybe_shared_buffer = unsafe { device_1.OpenSharedResource1(handle) };

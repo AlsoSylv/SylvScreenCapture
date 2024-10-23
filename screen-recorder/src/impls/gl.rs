@@ -17,7 +17,7 @@ use windows::{
     },
 };
 
-use crate::{NewSharedMemoryHeader, RenderingAPI};
+use crate::RenderingAPI;
 
 static OPENGL_SWAP_BUFFERS: OnceLock<<OpenGLHooks as RenderingAPI>::PresentFn> = OnceLock::new();
 
@@ -175,11 +175,9 @@ unsafe extern "system" fn new_wgl_swap_buffers(un_named_1: HDC) -> BOOL {
         WAS_OPENGL_CALL.store(true, std::sync::atomic::Ordering::SeqCst);
     }
 
-    let header = crate::SHARED_CPU_BUFFER.get().unwrap().0.as_ptr() as *mut NewSharedMemoryHeader;
-    unsafe {
-        (*header).set_api(crate::InUseRenderingAPI::Ogl);
-    }
-    let handle = unsafe { (*header).get_shared_handle() };
+    let header = crate::SHARED_CPU_BUFFER.get().unwrap().0.header();
+    header.set_api(shmem::RenderingAPI::Ogl);
+    let handle = header.get_nt_shared_handle();
 
     if let Some(handle) = handle {
         let (mut memory_object, mut texture) = (0, 0);

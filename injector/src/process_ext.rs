@@ -4,7 +4,6 @@ use std::{
     ptr::null_mut,
 };
 
-use sysinfo::{ProcessRefreshKind, RefreshKind, System};
 use windows::{
     core::{s, w},
     Win32::{
@@ -42,27 +41,21 @@ pub struct Process {
 
 impl Process {
     #[allow(unused)]
-    pub fn new(name: &str) -> Process {
-        Self::try_new(name).unwrap()
+    pub fn new(process: &sysinfo::Process) -> Process {
+        Self::try_new(process).unwrap()
     }
 
-    pub fn new_with_system(name: &str, system: &System) -> Process {
-        Self::try_new_with_system(name, system).unwrap()
+    pub fn new_with_system(process: &sysinfo::Process) -> Process {
+        Self::try_new_with_system(process).unwrap()
     }
 
-    pub fn try_new(name: &str) -> Result<Process, windows::core::Error> {
-        let system = System::new_with_specifics(
-            RefreshKind::new().with_processes(ProcessRefreshKind::new()),
-        );
-
-        Self::try_new_with_system(name, &system)
+    pub fn try_new(process: &sysinfo::Process) -> Result<Process, windows::core::Error> {
+        Self::try_new_with_system(process)
     }
 
     pub fn try_new_with_system(
-        name: &str,
-        system: &System,
+        process: &sysinfo::Process,
     ) -> Result<Process, windows::core::Error> {
-        let process = system.processes_by_name(name.as_ref()).next().unwrap();
         let pid = process.pid().as_u32();
         let process_handle = unsafe { OpenProcess(ATTACH_RIGHTS, false, pid)? };
 
@@ -82,7 +75,7 @@ impl Process {
         }
     }
 
-    pub fn get_modules(&self) -> Result<Vec<OsString>, windows::core::Error> {
+    pub fn iter_modules(&self, mut iter: impl FnMut(&OsStr)) -> Result<(), windows::core::Error> {
         const LEN: usize = 1024;
 
         let mut needed = 0;
@@ -132,7 +125,12 @@ impl Process {
                     Err(windows::core::Error::from_win32())
                 } else {
                     use std::os::windows::prelude::*;
-                    Ok(OsString::from_wide(&name_bfr[..len as usize]))
+
+                    let ostr = OsString::from_wide(&name_bfr[..len as usize]);
+
+                    iter(&ostr);
+
+                    Ok(())
                 }
             })
             .collect()
@@ -147,6 +145,7 @@ impl Process {
         self.handle
     }
 
+    #[allow(unused)]
     pub unsafe fn duplicate_handle(
         &self,
         target_process: &Process,

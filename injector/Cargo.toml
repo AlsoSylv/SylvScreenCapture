@@ -12,3 +12,4 @@ egui-winit = "0.29.1"
 shared_memory.workspace = true
 windows.workspace = true
 interprocess.workspace = true
+shmem.workspace = true

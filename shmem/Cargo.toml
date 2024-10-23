@@ -1,0 +1,8 @@
+[package]
+name = "shmem"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+shared_memory = "0.12.4"
+windows.workspace = true
