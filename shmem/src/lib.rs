@@ -79,7 +79,7 @@ impl Shmem {
     }
 }
 
-#[derive(Default, Debug)]
+#[derive(Default, Debug, PartialEq)]
 #[repr(u8)]
 pub enum RenderingAPI {
     #[default]
@@ -192,8 +192,7 @@ impl SharedMemoryHeader {
     }
 
     pub fn set_api(&self, api: RenderingAPI) {
-        self
-            .api
+        self.api
             .store(api as u8, std::sync::atomic::Ordering::SeqCst);
     }
 

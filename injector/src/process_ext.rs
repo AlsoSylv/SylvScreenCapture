@@ -114,24 +114,22 @@ impl Process {
         assert_eq!(needed, new_needed as usize);
 
         let len = new_needed as usize / size_of::<HMODULE>();
-        slice[0..len]
-            .iter()
-            .try_for_each(|module| {
-                let mut name_bfr = [0; MAX_PATH as usize];
-                let len = unsafe { GetModuleFileNameExW(self.handle, *module, &mut name_bfr) };
+        slice[0..len].iter().try_for_each(|module| {
+            let mut name_bfr = [0; MAX_PATH as usize];
+            let len = unsafe { GetModuleFileNameExW(self.handle, *module, &mut name_bfr) };
 
-                if len == 0 {
-                    Err(windows::core::Error::from_win32())
-                } else {
-                    use std::os::windows::prelude::*;
+            if len == 0 {
+                Err(windows::core::Error::from_win32())
+            } else {
+                use std::os::windows::prelude::*;
 
-                    let ostr = OsString::from_wide(&name_bfr[..len as usize]);
+                let ostr = OsString::from_wide(&name_bfr[..len as usize]);
 
-                    iter(&ostr);
+                iter(&ostr);
 
-                    Ok(())
-                }
-            })
+                Ok(())
+            }
+        })
     }
 
     #[allow(unused)]
@@ -139,6 +137,7 @@ impl Process {
         self.pid
     }
 
+    #[allow(unused)]
     pub fn handle(&self) -> HANDLE {
         self.handle
     }
@@ -206,7 +205,8 @@ impl Process {
             )?;
         }
 
-        let load_library_ptr: unsafe extern "system" fn(*mut std::ffi::c_void) -> u32 = unsafe { std::mem::transmute(load_library_ptr) };
+        let load_library_ptr: unsafe extern "system" fn(*mut std::ffi::c_void) -> u32 =
+            unsafe { std::mem::transmute(load_library_ptr) };
 
         unsafe {
             CreateRemoteThread(

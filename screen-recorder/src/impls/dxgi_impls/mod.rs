@@ -27,6 +27,7 @@ pub(super) static WAS_OPENGL_CALL: AtomicBool = AtomicBool::new(false);
 
 pub mod dx10;
 pub mod dx11;
+pub mod dx12;
 
 type PresentFn = unsafe extern "system" fn(*mut c_void, u32, DXGI_PRESENT) -> HRESULT;
 type ResizeFn = unsafe extern "system" fn(*mut c_void, u32, u32, u32, DXGI_FORMAT, u32) -> HRESULT;
@@ -58,7 +59,9 @@ unsafe extern "system" fn new_present_function(
                 // Repeat above but for DX11
                 if let Err(e) = dx11::dx11_duplicate_hook(&this, header) {
                     if e.code() == E_NOINTERFACE {
-                        todo!("D3D12 Call here");
+                        if let Err(e) = dx12::dx12_duplicate_hook(&this, header) {
+                            println!("{e}")
+                        }
                     }
                 }
             } else {

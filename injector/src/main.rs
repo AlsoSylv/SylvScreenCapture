@@ -1,4 +1,5 @@
 use egui::{Color32, ColorImage, Frame, Image, TextureHandle, TextureOptions};
+use shmem::RenderingAPI;
 // use interprocess::local_socket::{GenericNamespaced, Listener, ListenerOptions, ToNsName};
 use std::env;
 use std::ffi::OsStr;
@@ -200,7 +201,7 @@ impl ApplicationHandler for App {
             .unwrap();
         shared_mem.set_owner();
 
-        let (dx10_down_texture, dx11_up_texture) =
+        let [dx10_down_texture, dx11_up_texture] =
             inject(process, &device, &shared_mem).expect("AAA");
         textures.push((process.pid().as_u32(), dx10_down_texture, dx11_up_texture));
 
@@ -277,6 +278,10 @@ impl ApplicationHandler for App {
                         let header = shared_mem.header();
                         let (_pid, dx10_down_texture, dx11_up_texutre) = &d3d11_state.textures[0];
 
+                        if header.api() == RenderingAPI::None {
+                            return;
+                        }
+
                         let in_use_texture = if header.nt_handle_in_use() {
                             dx11_up_texutre
                         } else {
@@ -287,11 +292,7 @@ impl ApplicationHandler for App {
 
                         // TODO: Check process is in use
 
-                        unsafe {
-                            d3d11_state
-                                .ctx
-                                .CopyResource(&*new_texture, in_use_texture)
-                        };
+                        unsafe { d3d11_state.ctx.CopyResource(&*new_texture, in_use_texture) };
                         let mut mapped_surface = D3D11_MAPPED_SUBRESOURCE::default();
                         if let Err(e) = unsafe {
                             d3d11_state.ctx.Map(
@@ -322,9 +323,7 @@ impl ApplicationHandler for App {
                                 size: [width as usize, height as usize],
                                 pixels: slice
                                     .chunks(4)
-                                    .map(|slice| {
-                                        Color32::from_rgb(slice[2], slice[1], slice[0])
-                                    })
+                                    .map(|slice| Color32::from_rgb(slice[2], slice[1], slice[0]))
                                     .collect(),
                             }
                         } else {
@@ -384,10 +383,13 @@ fn inject(
     process: &Process,
     device: &ID3D11Device,
     shared_memory: &shmem::Shmem,
-) -> Result<(Option<ID3D11Texture2D>, Option<ID3D11Texture2D>), ()> {
+) -> Result<[Option<ID3D11Texture2D>; 2], ()> {
     const SHARED_RIGHTS: u32 = DXGI_SHARED_RESOURCE_READ.0 | DXGI_SHARED_RESOURCE_WRITE.0;
+    const NT_HANDLE_APIS: &[&str] = &["d3d11.dll", "d3d12.dll", "opengl32.dll", "vulkan-1.dll"];
+    const HANDLE_APIS: &[&str] = &["d3d9.dll", "d3d10.dll"];
 
     let target_process = process_ext::Process::new_with_system(process);
+    let mut textures = [None, None];
     let mut nt_handle = false;
     let mut handle = false;
 
@@ -395,41 +397,45 @@ fn inject(
         .iter_modules(|ostr| {
             let dll_name = std::path::Path::new(ostr).file_name().unwrap();
 
-            if dll_name == "d3d11.dll" || dll_name == "opengl32.dll" {
-                nt_handle |= true;
-            } else if dll_name == "d3d9.dll" || dll_name == "d3d10.dll" {
-                handle |= true;
+            for api in NT_HANDLE_APIS {
+                if dll_name == *api {
+                    nt_handle |= true;
+                    break;
+                }
+            }
+
+            for api in HANDLE_APIS {
+                if dll_name == *api {
+                    handle |= true;
+                    break;
+                }
             }
 
             println!("{dll_name:?}");
         })
         .unwrap();
 
-    println!("{nt_handle:?} {handle:?}");
-
     let current_process = process_ext::Process::current_process();
 
-    assert!(!target_process.handle().0.is_null());
+    if handle {
+        if let Some(texture) = create_texture(device, 1920, 1080, false) {
+            let resource = texture.cast::<IDXGIResource>().unwrap();
 
-    let texture_dx11_up = if nt_handle {
-        let mut texture = None;
-        unsafe {
-            device.CreateTexture2D(
-                &d3d11_texture_description(1920, 1080, true),
-                None,
-                Some(&mut texture),
-            )
+            let handle = unsafe { resource.GetSharedHandle().unwrap() };
+            shared_memory.header().set_shared_handle(handle.0);
+
+            textures[0] = Some(texture);
         }
-        .unwrap();
-        texture.inspect(|texture| {
-            let resource = texture.cast::<IDXGIResource1>().unwrap();
+    };
 
+    if nt_handle {
+        if let Some(texture) = create_texture(device, 1920, 1080, true) {
+            let resource = texture.cast::<IDXGIResource1>().unwrap();
             let handle = unsafe {
                 resource
                     .CreateSharedHandle(None, SHARED_RIGHTS, None)
                     .unwrap()
             };
-
             let dup_handle = unsafe {
                 current_process
                     .duplicate_handle(&target_process, handle, SHARED_RIGHTS)
@@ -437,30 +443,10 @@ fn inject(
             };
 
             shared_memory.header().set_nt_shared_handle(dup_handle.0);
-        })
-    } else {
-        None
-    };
 
-    let texture_dx10_down = if handle {
-        let mut texture = None;
-        unsafe {
-            device.CreateTexture2D(
-                &d3d11_texture_description(1920, 1080, false),
-                None,
-                Some(&mut texture),
-            )
+            textures[1] = Some(texture);
         }
-        .unwrap();
-        texture.inspect(|texture| {
-            let resource = texture.cast::<IDXGIResource>().unwrap();
-
-            let handle = unsafe { resource.GetSharedHandle().unwrap() };
-            shared_memory.header().set_shared_handle(handle.0);
-        })
-    } else {
-        None
-    };
+    }
 
     let mut dll_path = env::current_exe().unwrap();
     dll_path.pop();
@@ -468,5 +454,24 @@ fn inject(
 
     unsafe { target_process.load_remote_library(&dll_path) }.unwrap();
 
-    Ok((texture_dx10_down, texture_dx11_up))
+    Ok(textures)
+}
+
+fn create_texture(
+    device: &ID3D11Device,
+    width: u32,
+    height: u32,
+    nt_handle: bool,
+) -> Option<ID3D11Texture2D> {
+    let mut texture = None;
+    unsafe {
+        device.CreateTexture2D(
+            &d3d11_texture_description(width, height, nt_handle),
+            None,
+            Some(&mut texture),
+        )
+    }
+    .unwrap();
+
+    texture
 }
