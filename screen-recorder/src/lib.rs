@@ -116,6 +116,7 @@ fn dll_attach() {
     const D3D9_DLL: PCSTR = s!("d3d9.dll");
     const D3D10_DLL: PCSTR = s!("d3d10.dll");
     const D3D11_DLL: PCSTR = s!("d3d11.dll");
+    const D3D12_DLL: PCSTR = s!("d3d12.dll");
 
     // This is a list of APIs and their hooks, since all APIs need to be attempted to be hooked
     #[allow(unused)]
@@ -124,6 +125,7 @@ fn dll_attach() {
         (D3D9_DLL, dll_attach_rendering_api::<impls::DX9Hooks>),
         (D3D10_DLL, dll_attach_rendering_api::<impls::DX10Hooks>),
         (D3D11_DLL, dll_attach_rendering_api::<impls::DX11Hooks>),
+        (D3D12_DLL, dll_attach_rendering_api::<impls::DX12Hooks>),
     ];
 
     // let name = SOCKET_NAME.to_ns_name::<GenericNamespaced>().unwrap();
@@ -149,7 +151,6 @@ fn dll_attach() {
 
     let header = shared_buffer.header();
     header.set_pid();
-    header.set_width_and_height(1920, 1080);
 
     SHARED_CPU_BUFFER.get_or_init(|| crate::SharedMem(shared_buffer));
 
@@ -177,6 +178,13 @@ fn dll_attach() {
     let call = unsafe { GetModuleHandleA(D3D11_DLL) }
         .map_err(Error::from)
         .and_then(dll_attach_rendering_api::<impls::DX11Hooks>);
+    if let Err(e) = call {
+        println!("{e}");
+    }
+
+    let call = unsafe { GetModuleHandleA(D3D12_DLL) }
+        .map_err(Error::from)
+        .and_then(dll_attach_rendering_api::<impls::DX12Hooks>);
     if let Err(e) = call {
         println!("{e}");
     }

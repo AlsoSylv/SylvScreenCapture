@@ -278,61 +278,69 @@ impl ApplicationHandler for App {
                         let header = shared_mem.header();
                         let (_pid, dx10_down_texture, dx11_up_texutre) = &d3d11_state.textures[0];
 
-                        if header.api() == RenderingAPI::None {
-                            return;
-                        }
-
                         let in_use_texture = if header.nt_handle_in_use() {
                             dx11_up_texutre
                         } else {
                             dx10_down_texture
                         }
-                        .as_ref()
-                        .unwrap();
+                        .as_ref();
 
                         // TODO: Check process is in use
 
-                        unsafe { d3d11_state.ctx.CopyResource(&*new_texture, in_use_texture) };
-                        let mut mapped_surface = D3D11_MAPPED_SUBRESOURCE::default();
-                        if let Err(e) = unsafe {
-                            d3d11_state.ctx.Map(
-                                &*new_texture,
-                                0,
-                                D3D11_MAP_READ,
-                                0,
-                                Some(&mut mapped_surface),
-                            )
-                        } {
-                            println!("Error reading mapped surface: {e}");
-                            return;
-                        };
+                        let image = if let Some(in_use_texture) = in_use_texture {
+                            unsafe { d3d11_state.ctx.CopyResource(&*new_texture, in_use_texture) };
+                            let mut mapped_surface = D3D11_MAPPED_SUBRESOURCE::default();
+                            if let Err(e) = unsafe {
+                                d3d11_state.ctx.Map(
+                                    &*new_texture,
+                                    0,
+                                    D3D11_MAP_READ,
+                                    0,
+                                    Some(&mut mapped_surface),
+                                )
+                            } {
+                                println!("Error reading mapped surface: {e}");
+                                return;
+                            };
 
-                        let (width, height) = header.get_width_and_height();
+                            let (width, height) = header.get_width_and_height();
 
-                        let slice = unsafe {
-                            std::slice::from_raw_parts(
-                                mapped_surface.pData as *const u8,
-                                width as usize * height as usize * 4,
-                            )
-                        };
+                            let slice = unsafe {
+                                std::slice::from_raw_parts(
+                                    mapped_surface.pData as *const u8,
+                                    width as usize * height as usize * 4,
+                                )
+                            };
 
-                        let image = if (width as usize | height as usize) == 0 {
-                            ColorImage::from_rgba_unmultiplied([1, 1], &[0, 0, 0, 255])
-                        } else if header.ignore_alpha() {
-                            ColorImage {
-                                size: [width as usize, height as usize],
-                                pixels: slice
-                                    .chunks(4)
-                                    .map(|slice| Color32::from_rgb(slice[2], slice[1], slice[0]))
-                                    .collect(),
-                            }
+                            // if !slice.is_empty() {
+                            //     println!("{:?}", &slice[0..4])
+                            // }
+
+                            let image = if (width as usize | height as usize) == 0
+                                || header.api() == RenderingAPI::None
+                            {
+                                ColorImage::from_rgba_unmultiplied([1, 1], &[0, 0, 0, 255])
+                            } else if header.ignore_alpha() {
+                                ColorImage {
+                                    size: [width as usize, height as usize],
+                                    pixels: slice
+                                        .chunks(4)
+                                        .map(|slice| {
+                                            Color32::from_rgb(slice[2], slice[1], slice[0])
+                                        })
+                                        .collect(),
+                                }
+                            } else {
+                                ColorImage::from_rgba_unmultiplied(
+                                    [width as usize, height as usize],
+                                    slice,
+                                )
+                            };
+
+                            image
                         } else {
-                            ColorImage::from_rgba_unmultiplied(
-                                [width as usize, height as usize],
-                                slice,
-                            )
+                            ColorImage::from_rgba_unmultiplied([1, 1], &[0, 0, 0, 255])
                         };
-
                         texture_handle.set(image, TextureOptions::default());
 
                         egui::CentralPanel::default().show(ctx, |ui| {
@@ -353,22 +361,23 @@ impl ApplicationHandler for App {
                             .ClearRenderTargetView(render_target, &[0.0, 0.0, 0.0, 1.0]);
                     }
 
-                    egui_renderer
-                        .render(
-                            &d3d11_state.ctx,
-                            render_target,
-                            egui_ctx,
-                            render_output,
-                            window.scale_factor() as _,
-                        )
-                        .unwrap();
+                    if let Err(e) = egui_renderer.render(
+                        &d3d11_state.ctx,
+                        render_target,
+                        egui_ctx,
+                        render_output,
+                        window.scale_factor() as _,
+                    ) {
+                        println!("{e}");
+                        return;
+                    };
 
                     unsafe {
                         d3d11_state.swap_chain.Present(1, DXGI_PRESENT(0)).unwrap();
                     }
-                }
 
-                window.request_redraw();
+                    window.request_redraw();
+                }
             }
             _ => {}
         }

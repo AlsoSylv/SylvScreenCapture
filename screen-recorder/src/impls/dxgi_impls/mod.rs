@@ -6,15 +6,12 @@ use std::{
     },
 };
 
-use windows::Win32::Foundation::HWND;
 use windows::Win32::Graphics::Dxgi::Common::{
     DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_MODE_DESC, DXGI_MODE_SCALING_UNSPECIFIED,
     DXGI_MODE_SCANLINE_ORDER_UNSPECIFIED, DXGI_RATIONAL, DXGI_SAMPLE_DESC,
 };
-use windows::Win32::Graphics::Dxgi::{
-    DXGI_SWAP_CHAIN_DESC, DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH, DXGI_SWAP_EFFECT_DISCARD,
-    DXGI_USAGE_RENDER_TARGET_OUTPUT,
-};
+use windows::Win32::Graphics::Dxgi::{DXGI_SWAP_CHAIN_DESC, DXGI_USAGE_RENDER_TARGET_OUTPUT};
+use windows::Win32::{Foundation::HWND, Graphics::Dxgi::DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL};
 use windows::{
     core::{Interface, HRESULT},
     Win32::{
@@ -45,21 +42,23 @@ unsafe extern "system" fn new_present_function(
     let present_function = *DXGI_SWAP_BUFFER.get().expect(GET_PRESENT_ERROR);
 
     // In case the driver or app are using DXGI presentation for OpenGL (though I'd rather do this through a DX device)
-    if WAS_OPENGL_CALL.load(Ordering::SeqCst) {
-        WAS_OPENGL_CALL.store(false, Ordering::SeqCst);
-    } else {
+
+    let was_gl_call =
+        WAS_OPENGL_CALL.compare_exchange(true, false, Ordering::SeqCst, Ordering::SeqCst);
+
+    if let Err(false) = was_gl_call {
         // This is used in every capture (besides GL)
-        let this = unsafe { IDXGISwapChain::from_raw(this) };
+        let this = unsafe { IDXGISwapChain::from_raw_borrowed(&this).unwrap() };
         // This sucks, but I don't think there's a better way to handle it.
         let header = crate::SHARED_CPU_BUFFER.get().unwrap().0.header();
 
         // If this returns an `E_NOINTERFACE` error, that means that it is newer than DX10
-        if let Err(e) = dx10::dx10_new_present_fn(&this, header) {
+        if let Err(e) = dx10::dx10_new_present_fn(this, header) {
             if e.code() == E_NOINTERFACE {
                 // Repeat above but for DX11
-                if let Err(e) = dx11::dx11_duplicate_hook(&this, header) {
+                if let Err(e) = dx11::dx11_duplicate_hook(this, header) {
                     if e.code() == E_NOINTERFACE {
-                        if let Err(e) = dx12::dx12_duplicate_hook(&this, header) {
+                        if let Err(e) = dx12::dx12_duplicate_hook(this, header) {
                             println!("{e}")
                         }
                     }
@@ -92,10 +91,10 @@ fn dxgi_swap_chain_desc(window: HWND) -> DXGI_SWAP_CHAIN_DESC {
             Quality: 0,
         },
         BufferUsage: DXGI_USAGE_RENDER_TARGET_OUTPUT,
-        BufferCount: 1,
+        BufferCount: 2,
         OutputWindow: window,
         Windowed: true.into(),
-        SwapEffect: DXGI_SWAP_EFFECT_DISCARD,
-        Flags: DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH.0 as u32,
+        SwapEffect: DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL,
+        Flags: 0,
     }
 }

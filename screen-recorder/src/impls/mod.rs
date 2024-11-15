@@ -15,6 +15,7 @@ use crate::error::Error;
 pub use dx9::DX9Hooks;
 pub use dxgi_impls::dx10::DX10Hooks;
 pub use dxgi_impls::dx11::DX11Hooks;
+pub use dxgi_impls::dx12::DX12Hooks;
 pub use gl::OpenGLHooks;
 
 mod dx9;
@@ -46,8 +47,8 @@ unsafe fn create_window() -> Result<(HWND, WNDCLASSEXA), Error> {
             WINDOW_CLASS_NAME,
             WINDOW_CLASS_NAME,
             WS_OVERLAPPEDWINDOW,
-            0,
-            0,
+            10,
+            10,
             100,
             100,
             None,

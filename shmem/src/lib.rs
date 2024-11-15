@@ -163,8 +163,11 @@ impl SharedMemoryHeader {
     }
 
     pub fn get_nt_shared_handle(&self) -> Option<HANDLE> {
-        let handle = NonNull::new(self.shared_handle.load(std::sync::atomic::Ordering::SeqCst)
-            as isize as *mut std::ffi::c_void);
+        let handle = NonNull::new(
+            self.nt_shared_handle
+                .load(std::sync::atomic::Ordering::SeqCst) as isize
+                as *mut std::ffi::c_void,
+        );
         handle.map(|ptr| HANDLE(ptr.as_ptr() as _))
     }
 

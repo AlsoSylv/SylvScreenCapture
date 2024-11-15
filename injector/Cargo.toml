@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-sysinfo = { version = "0.31.4", features = ["system"] }
+sysinfo = { version = "0.32.0", features = ["system"] }
 winit = { version = "0.30.5", features = ["rwh_06"] }
 egui-directx11 = "0.6.0"
 egui = "0.29.1"
