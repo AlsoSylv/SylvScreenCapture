@@ -6,7 +6,6 @@ resolver = "2"
 interprocess = "2.2.1"
 shared_memory = "0.12.4"
 glad-gl = { path = "./glad-gl" }
-glad-vulkan = { path = "./glad-vulkan" }
 shmem = { path = "./shmem"}
 
 [workspace.dependencies.windows]

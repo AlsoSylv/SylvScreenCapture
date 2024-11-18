@@ -532,10 +532,6 @@ name = "glad-gl"
 version = "2.0.8"
 
 [[package]]
-name = "glad-vulkan"
-version = "2.0.8"
-
-[[package]]
 name = "hashbrown"
 version = "0.14.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1320,9 +1316,9 @@ name = "screen-recorder"
 version = "0.1.0"
 dependencies = [
  "glad-gl",
- "glad-vulkan",
  "retour",
  "shmem",
+ "vulkanalia",
  "windows 0.58.0",
 ]
 
@@ -1631,6 +1627,25 @@ name = "version_check"
 version = "0.9.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
+
+[[package]]
+name = "vulkanalia"
+version = "0.25.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f3497e2ea6bd330b1b5e1cc899ce89d2f155f098e43b28931557a3db7cad6891"
+dependencies = [
+ "libloading",
+ "vulkanalia-sys",
+]
+
+[[package]]
+name = "vulkanalia-sys"
+version = "0.25.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "73133cd645c0223d018827743566295509deaa33c13ecdb387286c2904c91ed3"
+dependencies = [
+ "bitflags 1.3.2",
+]
 
 [[package]]
 name = "walkdir"

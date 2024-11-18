@@ -62,15 +62,28 @@ fn d3d11_texture_description(width: u32, height: u32, nt_handle: bool) -> D3D11_
 #[derive(Default)]
 struct App {
     window: Option<Window>,
-    egui_winit: Option<egui_winit::State>,
-    renderer: Option<egui_directx11::Renderer>,
-    egui_ctx: Option<egui::Context>,
+    egui_state: Option<EguiState>,
     new_texture: Option<ID3D11Texture2D>,
-    texture_handle: Option<TextureHandle>,
     // shared_handle: Option<HANDLE>,
     // listener: Option<Listener>,
     shared_memory: Option<shmem::Shmem>,
     d3d11_state: Option<D3D11State>,
+    program_state: Option<Vec<ProgramState>>,
+}
+
+struct ProgramState {
+    name: String,
+    pid: u32,
+    shared_memory: shmem::Shmem,
+    copy_buffer: ID3D11Texture2D,
+    textures: [Option<ID3D11Texture2D>; 2],
+}
+
+struct EguiState {
+    winit: egui_winit::State,
+    renderer: egui_directx11::Renderer,
+    ctx: egui::Context,
+    texture_handle: TextureHandle,
 }
 
 struct D3D11State {
@@ -207,11 +220,14 @@ impl ApplicationHandler for App {
 
         let state = Self {
             window: Some(window),
-            egui_ctx: Some(egui_ctx),
-            egui_winit: Some(egui_winit),
-            renderer: Some(egui_renderer),
+            egui_state: Some(EguiState {
+                ctx: egui_ctx,
+                winit: egui_winit,
+                renderer: egui_renderer,
+                texture_handle,
+            }),
+            program_state: Some(Vec::new()),
             new_texture: Some(new_texture),
-            texture_handle: Some(texture_handle),
             // listener: Some(listener),
             // shared_handle: Some(shared_handle),
             shared_memory: Some(shared_mem),
@@ -233,13 +249,11 @@ impl ApplicationHandler for App {
         _: winit::window::WindowId,
         event: WindowEvent,
     ) {
-        let egui_winit = self.egui_winit.as_mut().unwrap();
+        let egui = self.egui_state.as_mut().unwrap();
         let window = self.window.as_mut().unwrap();
-        let egui_renderer = self.renderer.as_mut().unwrap();
-        let egui_ctx = self.egui_ctx.as_mut().unwrap();
         let new_texture = self.new_texture.as_mut().unwrap();
         let shared_mem = self.shared_memory.as_mut().unwrap();
-        let texture_handle = self.texture_handle.as_mut().unwrap();
+        let program_state = self.program_state.as_mut().unwrap();
         // let shared_handle = self.shared_handle.as_mut().unwrap();
         // let listener = self.listener.as_mut().unwrap();
         let d3d11_state = self.d3d11_state.as_mut().unwrap();
@@ -267,13 +281,36 @@ impl ApplicationHandler for App {
             }
             WindowEvent::RedrawRequested => {
                 if let Some(render_target) = &d3d11_state.render_target {
-                    let input = egui_winit.take_egui_input(window);
-                    let output = egui_ctx.run(input, |ctx| {
+                    let input = egui.winit.take_egui_input(window);
+                    let output = egui.ctx.run(input, |ctx| {
                         egui::SidePanel::new(egui::panel::Side::Left, "new_side_panel")
                             .frame(Frame::none().fill(Color32::WHITE))
                             .resizable(false)
                             .default_width(150.0)
-                            .show(ctx, |ui| ui.label("New Text here!!!"));
+                            .show(ctx, |ui| {
+                                let button = ui.button("Record Program");
+                                if button.clicked() {
+
+                                    // TODO: Enum windows
+                                }
+                                ui.label("New Text here!!!")
+                            });
+
+                        for program in program_state.iter_mut() {
+                            let header = program.shared_memory.header();
+                            let in_use_texture = if header.nt_handle_in_use() {
+                                &program.textures[0]
+                            } else {
+                                &program.textures[1]
+                            };
+
+                            if let Some(texture) = in_use_texture {
+                                unsafe {
+                                    d3d11_state.ctx.CopyResource(&program.copy_buffer, texture);
+                                }
+                                // TODO: Display Texture
+                            }
+                        }
 
                         let header = shared_mem.header();
                         let (_pid, dx10_down_texture, dx11_up_texutre) = &d3d11_state.textures[0];
@@ -341,10 +378,10 @@ impl ApplicationHandler for App {
                         } else {
                             ColorImage::from_rgba_unmultiplied([1, 1], &[0, 0, 0, 255])
                         };
-                        texture_handle.set(image, TextureOptions::default());
+                        egui.texture_handle.set(image, TextureOptions::default());
 
                         egui::CentralPanel::default().show(ctx, |ui| {
-                            let image = Image::from_texture(&*texture_handle).shrink_to_fit();
+                            let image = Image::from_texture(&egui.texture_handle).shrink_to_fit();
                             ui.add(image);
                         });
 
@@ -353,7 +390,7 @@ impl ApplicationHandler for App {
 
                     let (render_output, platform_output, _) = egui_directx11::split_output(output);
 
-                    egui_winit.handle_platform_output(window, platform_output);
+                    egui.winit.handle_platform_output(window, platform_output);
 
                     unsafe {
                         d3d11_state
@@ -361,10 +398,10 @@ impl ApplicationHandler for App {
                             .ClearRenderTargetView(render_target, &[0.0, 0.0, 0.0, 1.0]);
                     }
 
-                    if let Err(e) = egui_renderer.render(
+                    if let Err(e) = egui.renderer.render(
                         &d3d11_state.ctx,
                         render_target,
-                        egui_ctx,
+                        &egui.ctx,
                         render_output,
                         window.scale_factor() as _,
                     ) {

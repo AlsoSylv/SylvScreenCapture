@@ -21,6 +21,7 @@ pub use gl::OpenGLHooks;
 mod dx9;
 mod dxgi_impls;
 mod gl;
+mod vk;
 
 const WINDOW_CLASS_NAME: PCSTR = s!("dummy_window_for_swap_chain");
 
