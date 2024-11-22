@@ -12,5 +12,7 @@ windows.workspace = true
 # shared_memory.workspace = true
 glad-gl.workspace = true
 shmem.workspace = true
-vulkanalia = { version = "0.25.0", features = ["libloading"] }
+vulkanalia = { version = "0.25.0", features = ["libloading", "window"] }
+vulkanalia-vma = "0.2.0"
+raw-window-handle = "0.6.2"
 retour = { version = "0.3.1" }

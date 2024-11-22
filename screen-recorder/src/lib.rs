@@ -117,6 +117,7 @@ fn dll_attach() {
     const D3D10_DLL: PCSTR = s!("d3d10.dll");
     const D3D11_DLL: PCSTR = s!("d3d11.dll");
     const D3D12_DLL: PCSTR = s!("d3d12.dll");
+    const VK_DLL: PCSTR = s!("vulkan-1.dll");
 
     // This is a list of APIs and their hooks, since all APIs need to be attempted to be hooked
     #[allow(unused)]
@@ -161,12 +162,12 @@ fn dll_attach() {
         println!("{e}");
     }
 
-    let call = unsafe { GetModuleHandleA(D3D9_DLL) }
-        .map_err(Error::from)
-        .and_then(dll_attach_rendering_api::<impls::DX9Hooks>);
-    if let Err(e) = call {
-        println!("{e}");
-    }
+    // let call = unsafe { GetModuleHandleA(D3D9_DLL) }
+    //     .map_err(Error::from)
+    //     .and_then(dll_attach_rendering_api::<impls::DX9Hooks>);
+    // if let Err(e) = call {
+    //     println!("{e}");
+    // }
 
     let call = unsafe { GetModuleHandleA(D3D10_DLL) }
         .map_err(Error::from)
@@ -182,9 +183,16 @@ fn dll_attach() {
         println!("{e}");
     }
 
-    let call = unsafe { GetModuleHandleA(D3D12_DLL) }
+    // let call = unsafe { GetModuleHandleA(D3D12_DLL) }
+    //     .map_err(Error::from)
+    //     .and_then(dll_attach_rendering_api::<impls::DX12Hooks>);
+    // if let Err(e) = call {
+    //     println!("{e}");
+    // }
+
+    let call = unsafe { GetModuleHandleA(VK_DLL) }
         .map_err(Error::from)
-        .and_then(dll_attach_rendering_api::<impls::DX12Hooks>);
+        .and_then(dll_attach_rendering_api::<impls::VkHooks>);
     if let Err(e) = call {
         println!("{e}");
     }

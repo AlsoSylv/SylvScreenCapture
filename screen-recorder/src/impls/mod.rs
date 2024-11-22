@@ -17,6 +17,7 @@ pub use dxgi_impls::dx10::DX10Hooks;
 pub use dxgi_impls::dx11::DX11Hooks;
 pub use dxgi_impls::dx12::DX12Hooks;
 pub use gl::OpenGLHooks;
+pub use vk::VkHooks;
 
 mod dx9;
 mod dxgi_impls;
