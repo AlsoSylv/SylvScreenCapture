@@ -349,9 +349,11 @@ impl ApplicationHandler for App {
                                 )
                             };
 
-                            // if !slice.is_empty() {
-                            //     println!("{:?}", &slice[0..4])
-                            // }
+                            if !slice.is_empty() {
+                                if slice[0..4] != [0, 0, 0, 0] {
+                                    println!("{:?}", &slice[0..4])
+                                }
+                            }
 
                             let image = if (width as usize | height as usize) == 0
                                 || header.api() == RenderingAPI::None
