@@ -191,7 +191,8 @@ impl RenderingAPI for VkHooks {
             GET_SWAPCHAIN_IMAGES.get_or_init(|| detour).enable()?;
         }
 
-        let instance_commands = unsafe { InstanceCommands::load(|name| vk_get_instance_proc_addr(instance, name)) };
+        let instance_commands =
+            unsafe { InstanceCommands::load(|name| vk_get_instance_proc_addr(instance, name)) };
 
         Ok(Self {
             device,
@@ -276,7 +277,6 @@ unsafe extern "system" fn vk_new_queue_present(
 
     WAS_OPENGL_CALL.store(true, Ordering::SeqCst);
 
-
     let device = vulkanalia::vk::Device::from_raw(DEVICE.load(Ordering::SeqCst));
     let commands = COMMANDS.get().unwrap();
 
@@ -333,10 +333,12 @@ unsafe extern "system" fn vk_new_queue_present(
             let image = images[idx as usize];
 
             let memory_barrier = vk::ImageMemoryBarrier::builder()
-                .old_layout(ImageLayout::UNDEFINED)
+                .old_layout(ImageLayout::PRESENT_SRC_KHR)
                 .new_layout(ImageLayout::TRANSFER_SRC_OPTIMAL)
                 .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
                 .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                .src_access_mask(vk::AccessFlags::MEMORY_READ)
+                .dst_access_mask(vk::AccessFlags::TRANSFER_READ)
                 .subresource_range(vk::ImageSubresourceRange {
                     aspect_mask: vk::ImageAspectFlags::COLOR,
                     base_array_layer: 0,
@@ -348,7 +350,7 @@ unsafe extern "system" fn vk_new_queue_present(
 
             (commands.cmd_pipeline_barrier)(
                 command_buffer,
-                PipelineStageFlags::DRAW_INDIRECT,
+                PipelineStageFlags::TRANSFER,
                 PipelineStageFlags::TRANSFER,
                 DependencyFlags::empty(),
                 0,
@@ -376,7 +378,7 @@ unsafe extern "system" fn vk_new_queue_present(
             (commands.cmd_copy_image)(
                 command_buffer,
                 image,
-                ImageLayout::SHARED_PRESENT_KHR,
+                ImageLayout::TRANSFER_SRC_OPTIMAL,
                 *shared_image,
                 ImageLayout::TRANSFER_DST_OPTIMAL,
                 1,
@@ -388,6 +390,8 @@ unsafe extern "system" fn vk_new_queue_present(
             let memory_barrier = vk::ImageMemoryBarrier::builder()
                 .old_layout(ImageLayout::TRANSFER_SRC_OPTIMAL)
                 .new_layout(ImageLayout::PRESENT_SRC_KHR)
+                .src_access_mask(vk::AccessFlags::TRANSFER_READ)
+                .dst_access_mask(vk::AccessFlags::MEMORY_READ)
                 .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
                 .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
                 .subresource_range(vk::ImageSubresourceRange {
@@ -420,11 +424,20 @@ unsafe extern "system" fn vk_new_queue_present(
 
             let submit_info = vk::SubmitInfo::builder().command_buffers(buffers);
 
-            let result = (commands.queue_submit)(queue, 1, &*submit_info, vk::Fence::null());
+            let mut fence = vk::Fence::null();
+
+            let result = unsafe {
+                (commands.create_fence)(device, &vk::FenceCreateInfo::default(), null(), &mut fence)
+            };
+
+            println!("Create fence: {result}");
+
+            let result = (commands.queue_submit)(queue, 1, &*submit_info, fence);
 
             println!("{result}");
 
-            let result = (commands.queue_wait_idle)(queue);
+            let result =
+                unsafe { (commands.wait_for_fences)(device, 1, &fence, vk::TRUE, u64::MAX) };
 
             println!("{result}");
 

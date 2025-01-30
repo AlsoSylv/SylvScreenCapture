@@ -95,6 +95,23 @@ pub enum RenderingAPI {
     Dx12 = 0b1011,
 }
 
+impl RenderingAPI {
+    pub fn flip(&self) -> bool {
+        matches!(self, RenderingAPI::Ogl)
+    }
+
+    pub fn ignore_alpha(&self) -> bool {
+        matches!(self, RenderingAPI::Dx9 | RenderingAPI::Dx9x)
+    }
+
+    pub fn nt_handle_in_use(&self) -> bool {
+        matches!(
+            self,
+            RenderingAPI::Dx11 | RenderingAPI::Dx12 | RenderingAPI::Ogl | RenderingAPI::Vk
+        )
+    }
+}
+
 impl TryFrom<u8> for RenderingAPI {
     type Error = u8;
 
@@ -197,20 +214,5 @@ impl SharedMemoryHeader {
     pub fn set_api(&self, api: RenderingAPI) {
         self.api
             .store(api as u8, std::sync::atomic::Ordering::SeqCst);
-    }
-
-    pub fn flip(&self) -> bool {
-        matches!(self.api(), RenderingAPI::Ogl)
-    }
-
-    pub fn ignore_alpha(&self) -> bool {
-        matches!(self.api(), RenderingAPI::Dx9 | RenderingAPI::Dx9x)
-    }
-
-    pub fn nt_handle_in_use(&self) -> bool {
-        matches!(
-            self.api(),
-            RenderingAPI::Dx11 | RenderingAPI::Dx12 | RenderingAPI::Ogl | RenderingAPI::Vk
-        )
     }
 }

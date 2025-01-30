@@ -298,7 +298,10 @@ impl ApplicationHandler for App {
 
                         for program in program_state.iter_mut() {
                             let header = program.shared_memory.header();
-                            let in_use_texture = if header.nt_handle_in_use() {
+
+                            let rendering_api = header.api();
+
+                            let in_use_texture = if rendering_api.nt_handle_in_use() {
                                 &program.textures[0]
                             } else {
                                 &program.textures[1]
@@ -313,9 +316,11 @@ impl ApplicationHandler for App {
                         }
 
                         let header = shared_mem.header();
+                        let rendering_api = header.api();
+
                         let (_pid, dx10_down_texture, dx11_up_texutre) = &d3d11_state.textures[0];
 
-                        let in_use_texture = if header.nt_handle_in_use() {
+                        let in_use_texture = if rendering_api.nt_handle_in_use() {
                             dx11_up_texutre
                         } else {
                             dx10_down_texture
@@ -359,7 +364,7 @@ impl ApplicationHandler for App {
                                 || header.api() == RenderingAPI::None
                             {
                                 ColorImage::from_rgba_unmultiplied([1, 1], &[0, 0, 0, 255])
-                            } else if header.ignore_alpha() {
+                            } else if rendering_api.ignore_alpha() {
                                 ColorImage {
                                     size: [width as usize, height as usize],
                                     pixels: slice
