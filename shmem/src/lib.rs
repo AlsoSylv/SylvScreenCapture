@@ -1,4 +1,5 @@
 use std::{
+    ffi::CStr,
     ptr::NonNull,
     sync::atomic::{AtomicI32, AtomicU32, AtomicU64, AtomicU8},
 };
@@ -6,76 +7,31 @@ use std::{
 pub use shared_memory::ShmemError;
 use windows::Win32::Foundation::HANDLE;
 
-const HEADER_SIZE: usize = size_of::<SharedMemoryHeader>();
+mod os;
 
-pub struct ShmemBuilder {
-    inner: shared_memory::ShmemConf,
+pub struct Shmem<'a, T> {
+    inner: os::ShMem<'a, T>,
 }
 
-impl ShmemBuilder {
-    /// Automatically allocates the size of the header
-    pub fn new(name: impl AsRef<str>) -> ShmemBuilder {
-        let inner = shared_memory::ShmemConf::new()
-            .os_id(name)
-            .size(HEADER_SIZE);
-
-        Self { inner }
-    }
-
-    /// This automatically allocs size + size_of::<SharedMemoryHeader>
-    pub fn size(self, size: usize) -> ShmemBuilder {
-        Self {
-            inner: self.inner.size(size + HEADER_SIZE),
+impl<'a, T> Shmem<'a, T> {
+    pub fn new(name: &CStr) -> Self {
+        Shmem {
+            inner: os::ShMem::new(name).unwrap(),
         }
     }
 
-    pub fn create(self) -> Result<Shmem, ShmemError> {
-        let inner = self.inner.create()?;
-        let outer = Shmem { inner };
-        outer.init_header();
-        Ok(outer)
+    pub fn open(name: &CStr) -> Self {
+        Shmem {
+            inner: os::ShMem::open(name).unwrap(),
+        }
     }
 
-    pub fn open(self) -> Result<Shmem, ShmemError> {
-        let inner = self.inner.open()?;
-        Ok(Shmem { inner })
-    }
-}
-
-pub struct Shmem {
-    inner: shared_memory::Shmem,
-}
-
-impl Shmem {
-    fn header_ptr(&self) -> *mut SharedMemoryHeader {
-        self.inner.as_ptr() as _
+    pub fn as_ref(&self) -> &T {
+        self.inner.as_ref()
     }
 
-    fn init_header(&self) {
-        let header = self.header_ptr();
-        unsafe { *header = Default::default() }
-    }
-
-    pub fn header(&self) -> &SharedMemoryHeader {
-        unsafe { &*self.header_ptr() }
-    }
-
-    pub fn buffer(&self) -> &[u8] {
-        let ptr = self.buffer_ptr();
-
-        unsafe { std::slice::from_raw_parts(ptr, self.buffer_size()) }
-    }
-
-    pub fn buffer_ptr(&self) -> *mut u8 {
-        unsafe { self.inner.as_ptr().add(HEADER_SIZE) }
-    }
-
-    pub fn buffer_size(&self) -> usize {
-        self.inner.len() - HEADER_SIZE
-    }
-
-    pub fn set_owner(&mut self) {
-        self.inner.set_owner(true);
+    pub fn as_mut(&mut self) -> &mut T {
+        self.inner.as_mut()
     }
 }
 

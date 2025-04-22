@@ -61,7 +61,7 @@ enum Reason {
     }
 */
 #[repr(transparent)]
-pub struct SharedMem(pub shmem::Shmem);
+pub struct SharedMem(pub shmem::Shmem<'static, shmem::SharedMemoryHeader>);
 
 unsafe impl Send for SharedMem {}
 unsafe impl Sync for SharedMem {}
@@ -148,10 +148,9 @@ fn dll_attach() {
     //     }
     // };
 
-    let shared_buffer = shmem::ShmemBuilder::new("SylvScreenShare").open().unwrap();
+    let shared_buffer = shmem::Shmem::<shmem::SharedMemoryHeader>::open(c"SylvScreenShare");
 
-    let header = shared_buffer.header();
-    header.set_pid();
+    shared_buffer.as_ref().set_pid();
 
     SHARED_CPU_BUFFER.get_or_init(|| crate::SharedMem(shared_buffer));
 
@@ -162,12 +161,12 @@ fn dll_attach() {
         println!("{e}");
     }
 
-    // let call = unsafe { GetModuleHandleA(D3D9_DLL) }
-    //     .map_err(Error::from)
-    //     .and_then(dll_attach_rendering_api::<impls::DX9Hooks>);
-    // if let Err(e) = call {
-    //     println!("{e}");
-    // }
+    let call = unsafe { GetModuleHandleA(D3D9_DLL) }
+        .map_err(Error::from)
+        .and_then(dll_attach_rendering_api::<impls::DX9Hooks>);
+    if let Err(e) = call {
+        println!("{e}");
+    }
 
     let call = unsafe { GetModuleHandleA(D3D10_DLL) }
         .map_err(Error::from)

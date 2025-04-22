@@ -138,11 +138,12 @@ unsafe extern "system" fn new_dx9_present_function(
     window: HWND,
     rgn: *const RGNDATA,
 ) -> HRESULT {
-    let this = unsafe { IDirect3DDevice9::from_raw(this) };
+    let this = unsafe { IDirect3DDevice9::from_raw_borrowed(&this).unwrap() };
 
     if let Some(buffer) = SHARED_CPU_BUFFER.get() {
-        let header = buffer.0.header();
+        let header = buffer.0.as_ref();
         header.set_api(shmem::RenderingAPI::Dx9);
+        header.set_width_and_height(1920, 1080);
 
         let Some(mut handle) = header.get_shared_handle() else {
             let present_fn = DX9_PRESENT

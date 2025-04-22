@@ -285,7 +285,7 @@ unsafe extern "system" fn vk_new_queue_present(
     let swapchain = unsafe { &*info.swapchains };
 
     if !device.is_null() {
-        let header = SHARED_CPU_BUFFER.get().unwrap().0.header();
+        let header = SHARED_CPU_BUFFER.get().unwrap().0.as_ref();
         header.set_api(shmem::RenderingAPI::Vk);
         header.set_width_and_height(1920, 1080);
         if let (Some(shared_image), Some(command_pool)) =
@@ -302,11 +302,11 @@ unsafe extern "system" fn vk_new_queue_present(
                 .command_pool(*command_pool)
                 .level(CommandBufferLevel::PRIMARY);
 
-            (commands.allocate_command_buffers)(device, &*info, &mut command_buffer); // TODO: Use proper info
+            (commands.allocate_command_buffers)(device, &*info, &mut command_buffer);
             let info =
                 CommandBufferBeginInfo::builder().flags(CommandBufferUsageFlags::ONE_TIME_SUBMIT);
 
-            (commands.begin_command_buffer)(command_buffer, &*info); // TODO: Use proper info
+            (commands.begin_command_buffer)(command_buffer, &*info);
 
             let images = &**IMAGES.get_or_init(|| {
                 let mut len = 0;

@@ -175,7 +175,7 @@ unsafe extern "system" fn new_wgl_swap_buffers(un_named_1: HDC) -> BOOL {
         WAS_OPENGL_CALL.store(true, std::sync::atomic::Ordering::SeqCst);
     }
 
-    let header = crate::SHARED_CPU_BUFFER.get().unwrap().0.header();
+    let header = crate::SHARED_CPU_BUFFER.get().unwrap().0.as_ref();
     header.set_api(shmem::RenderingAPI::Ogl);
     let handle = header.get_nt_shared_handle();
 
