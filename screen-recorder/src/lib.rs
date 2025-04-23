@@ -2,14 +2,15 @@
 // use interprocess::local_socket::{GenericNamespaced, Stream, ToNsName};
 use retour::{Function, RawDetour};
 use std::ffi::c_void;
+use windows::core::BOOL;
 // use std::io::{ErrorKind, Read, Write};
-use std::sync::OnceLock;
+use std::sync::{LazyLock, RwLock};
 use windows::Win32::Foundation::HMODULE;
 use windows::Win32::System::SystemServices;
 use windows::{
     core::{s, PCSTR},
     Win32::{
-        Foundation::{BOOL, HINSTANCE},
+        Foundation::HINSTANCE,
         System::{
             Console::AllocConsole,
             LibraryLoader::{DisableThreadLibraryCalls, GetModuleHandleA},
@@ -49,25 +50,15 @@ enum Reason {
     DllProcessDetach,
 }
 
-// TODO: Implement a clearer shared memory layout
-/*
-    The ideal layout in my head is
-    struct SharedMemory {
-        shared_handle: AtomicU64,
-        dimensions: AtomicU64, (hi: width: u32, lo: height: u32)
-        api: AtomicU8,
-        flip: AtomicBool,
-        ignore_alpha: AtomicBool,
-    }
-*/
-#[repr(transparent)]
-pub struct SharedMem(pub shmem::Shmem);
-
-unsafe impl Send for SharedMem {}
-unsafe impl Sync for SharedMem {}
-
-pub static SHARED_CPU_BUFFER: OnceLock<SharedMem> = OnceLock::new();
-// pub static SHARED_HANDLE: AtomicPtr<c_void> = AtomicPtr::new(null_mut());
+/// This requires that the shared memory be created BEFORE the DLL is injected, but this is fine
+/// This is wrapped in a RwLock, not for safety (every operation is atomic), but so that it can be dropped
+/// When the game exits
+pub static SHARED_CPU_BUFFER: LazyLock<RwLock<shmem::Shmem<'static, shmem::SharedMemoryHeader>>> =
+    LazyLock::new(|| {
+        let shared_buffer = shmem::Shmem::<shmem::SharedMemoryHeader>::open(c"SylvScreenShare");
+        shared_buffer.set_pid();
+        RwLock::new(shared_buffer)
+    });
 
 // Export this main as DllMain
 #[export_name = "DllMain"]
@@ -98,10 +89,13 @@ fn main(hinst_dll: HINSTANCE, reason: Reason) -> Result<(), Error> {
         }
 
         unsafe {
-            DisableThreadLibraryCalls(hinst_dll)?;
+            DisableThreadLibraryCalls(hinst_dll.into())?;
         }
 
         std::thread::spawn(dll_attach);
+    } else {
+        let mut lock = SHARED_CPU_BUFFER.write().unwrap();
+        unsafe { lock.dec_ref_count() };
     };
 
     Ok(())
@@ -121,39 +115,13 @@ fn dll_attach() {
 
     // This is a list of APIs and their hooks, since all APIs need to be attempted to be hooked
     #[allow(unused)]
-    const MODULES: ModuleDispatchArray = &[
+    const MODULES: ModuleDispatchArray<'static> = &[
         (OGL_DLL, dll_attach_rendering_api::<impls::OpenGLHooks>),
         (D3D9_DLL, dll_attach_rendering_api::<impls::DX9Hooks>),
         (D3D10_DLL, dll_attach_rendering_api::<impls::DX10Hooks>),
         (D3D11_DLL, dll_attach_rendering_api::<impls::DX11Hooks>),
         (D3D12_DLL, dll_attach_rendering_api::<impls::DX12Hooks>),
     ];
-
-    // let name = SOCKET_NAME.to_ns_name::<GenericNamespaced>().unwrap();
-
-    // let mut try_connect = Stream::connect(name.clone());
-
-    // let mut stream = loop {
-    //     match try_connect {
-    //         Err(e) if e.kind() == ErrorKind::NotFound => {
-    //             try_connect = Stream::connect(name.clone());
-    //         }
-    //         Err(e) => {
-    //             println!("{e}");
-    //             try_connect = Stream::connect(name.clone());
-    //         }
-    //         Ok(stream) => {
-    //             break stream;
-    //         }
-    //     }
-    // };
-
-    let shared_buffer = shmem::ShmemBuilder::new("SylvScreenShare").open().unwrap();
-
-    let header = shared_buffer.header();
-    header.set_pid();
-
-    SHARED_CPU_BUFFER.get_or_init(|| crate::SharedMem(shared_buffer));
 
     let call = unsafe { GetModuleHandleA(OGL_DLL) }
         .map_err(Error::from)
@@ -162,12 +130,12 @@ fn dll_attach() {
         println!("{e}");
     }
 
-    // let call = unsafe { GetModuleHandleA(D3D9_DLL) }
-    //     .map_err(Error::from)
-    //     .and_then(dll_attach_rendering_api::<impls::DX9Hooks>);
-    // if let Err(e) = call {
-    //     println!("{e}");
-    // }
+    let call = unsafe { GetModuleHandleA(D3D9_DLL) }
+        .map_err(Error::from)
+        .and_then(dll_attach_rendering_api::<impls::DX9Hooks>);
+    if let Err(e) = call {
+        println!("{e}");
+    }
 
     let call = unsafe { GetModuleHandleA(D3D10_DLL) }
         .map_err(Error::from)

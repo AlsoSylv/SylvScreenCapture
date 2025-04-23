@@ -4,12 +4,10 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-sysinfo = { version = "0.32.0", features = ["system"] }
-winit = { version = "0.30.5", features = ["rwh_06"] }
-egui-directx11 = "0.6.0"
-egui = "0.29.1"
-egui-winit = "0.29.1"
-shared_memory.workspace = true
+sysinfo = { git = "https://github.com/GuillaumeGomez/sysinfo.git", rev = "0405079" }
+winit = { version = "0.30.9", features = ["rwh_06"] }
+egui-directx11 = "0.7.0"
+egui = "0.31.0"
+egui-winit = "0.31.0"
 windows.workspace = true
-interprocess.workspace = true
 shmem.workspace = true

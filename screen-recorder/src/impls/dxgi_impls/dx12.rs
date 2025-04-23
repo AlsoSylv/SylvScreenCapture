@@ -195,7 +195,7 @@ pub(super) fn dx12_duplicate_hook(
                 queue.ExecuteCommandLists(&[Some(command_list.clone().into())]);
             }
             let fence: ID3D12Fence = unsafe { device.CreateFence(0, D3D12_FENCE_FLAG_NONE) }?;
-            let auto_reset = unsafe { CreateEventA(None, false, None, None) }?;
+            let auto_reset = unsafe { CreateEventA(None, false, false, None) }?;
             unsafe { fence.SetEventOnCompletion(0, auto_reset) }?;
             unsafe { queue.Wait(&fence, 0)? };
             unsafe { WaitForSingleObject(auto_reset, INFINITE) };

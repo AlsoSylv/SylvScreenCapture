@@ -1,81 +1,67 @@
 use std::{
+    ffi::CStr,
+    ops::{Deref, DerefMut},
     ptr::NonNull,
-    sync::atomic::{AtomicI32, AtomicU32, AtomicU64, AtomicU8},
+    sync::atomic::{AtomicI32, AtomicU8, AtomicU32, AtomicU64},
 };
 
-pub use shared_memory::ShmemError;
 use windows::Win32::Foundation::HANDLE;
 
-const HEADER_SIZE: usize = size_of::<SharedMemoryHeader>();
+mod os;
 
-pub struct ShmemBuilder {
-    inner: shared_memory::ShmemConf,
+pub struct Shmem<'a, T>
+where
+    T: Default,
+{
+    inner: os::ShMem<'a, T>,
 }
 
-impl ShmemBuilder {
-    /// Automatically allocates the size of the header
-    pub fn new(name: impl AsRef<str>) -> ShmemBuilder {
-        let inner = shared_memory::ShmemConf::new()
-            .os_id(name)
-            .size(HEADER_SIZE);
+// In theory, as long as the inner type would be safe across multiple threads, the shared memory is
+unsafe impl<T> Send for Shmem<'_, T> where T: Send + Default {}
+unsafe impl<T> Sync for Shmem<'_, T> where T: Sync + Default {}
 
-        Self { inner }
-    }
-
-    /// This automatically allocs size + size_of::<SharedMemoryHeader>
-    pub fn size(self, size: usize) -> ShmemBuilder {
-        Self {
-            inner: self.inner.size(size + HEADER_SIZE),
+impl<T> Shmem<'_, T>
+where
+    T: Default,
+{
+    pub fn new(name: &CStr) -> Self {
+        Shmem {
+            inner: os::ShMem::new(name).unwrap(),
         }
     }
 
-    pub fn create(self) -> Result<Shmem, ShmemError> {
-        let inner = self.inner.create()?;
-        let outer = Shmem { inner };
-        outer.init_header();
-        Ok(outer)
+    pub fn open(name: &CStr) -> Self {
+        Shmem {
+            inner: os::ShMem::open(name).unwrap(),
+        }
     }
 
-    pub fn open(self) -> Result<Shmem, ShmemError> {
-        let inner = self.inner.open()?;
-        Ok(Shmem { inner })
+    /// # Safety
+    /// Calling this can trigger the deconstructor, and should only be called if this is the intended effect
+    pub unsafe fn dec_ref_count(&mut self) {
+        unsafe {
+            self.inner.dec_ref_count();
+        }
     }
 }
 
-pub struct Shmem {
-    inner: shared_memory::Shmem,
+impl<T> Deref for Shmem<'_, T>
+where
+    T: Default,
+{
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        self.inner.as_ref()
+    }
 }
 
-impl Shmem {
-    fn header_ptr(&self) -> *mut SharedMemoryHeader {
-        self.inner.as_ptr() as _
-    }
-
-    fn init_header(&self) {
-        let header = self.header_ptr();
-        unsafe { *header = Default::default() }
-    }
-
-    pub fn header(&self) -> &SharedMemoryHeader {
-        unsafe { &*self.header_ptr() }
-    }
-
-    pub fn buffer(&self) -> &[u8] {
-        let ptr = self.buffer_ptr();
-
-        unsafe { std::slice::from_raw_parts(ptr, self.buffer_size()) }
-    }
-
-    pub fn buffer_ptr(&self) -> *mut u8 {
-        unsafe { self.inner.as_ptr().add(HEADER_SIZE) }
-    }
-
-    pub fn buffer_size(&self) -> usize {
-        self.inner.len() - HEADER_SIZE
-    }
-
-    pub fn set_owner(&mut self) {
-        self.inner.set_owner(true);
+impl<T> DerefMut for Shmem<'_, T>
+where
+    T: Default,
+{
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.inner.as_mut()
     }
 }
 
@@ -170,7 +156,7 @@ impl SharedMemoryHeader {
 
     pub fn get_shared_handle(&self) -> Option<HANDLE> {
         let handle = NonNull::new(self.shared_handle.load(std::sync::atomic::Ordering::SeqCst)
-            as isize as *mut std::ffi::c_void);
+            as u32 as usize as isize as *mut std::ffi::c_void);
         handle.map(|ptr| HANDLE(ptr.as_ptr() as _))
     }
 

@@ -55,7 +55,7 @@ unsafe fn create_window() -> Result<(HWND, WNDCLASSEXA), Error> {
             100,
             None,
             None,
-            window_class.hInstance,
+            Some(window_class.hInstance),
             None,
         )?
     };
@@ -68,7 +68,7 @@ unsafe fn delete_window(window: HWND, window_class: WNDCLASSEXA) -> Result<(), E
         DestroyWindow(window)?;
     }
     unsafe {
-        UnregisterClassA(WINDOW_CLASS_NAME, window_class.hInstance)?;
+        UnregisterClassA(WINDOW_CLASS_NAME, Some(window_class.hInstance))?;
     }
 
     Ok(())

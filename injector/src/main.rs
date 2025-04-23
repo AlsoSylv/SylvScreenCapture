@@ -1,6 +1,5 @@
 use egui::{Color32, ColorImage, Frame, Image, TextureHandle, TextureOptions};
 use shmem::RenderingAPI;
-// use interprocess::local_socket::{GenericNamespaced, Listener, ListenerOptions, ToNsName};
 use std::env;
 use std::ffi::OsStr;
 // use std::io::{Read, Write};
@@ -60,21 +59,21 @@ fn d3d11_texture_description(width: u32, height: u32, nt_handle: bool) -> D3D11_
 }
 
 #[derive(Default)]
-struct App {
+struct App<'a> {
     window: Option<Window>,
     egui_state: Option<EguiState>,
     new_texture: Option<ID3D11Texture2D>,
     // shared_handle: Option<HANDLE>,
     // listener: Option<Listener>,
-    shared_memory: Option<shmem::Shmem>,
+    shared_memory: Option<shmem::Shmem<'a, shmem::SharedMemoryHeader>>,
     d3d11_state: Option<D3D11State>,
-    program_state: Option<Vec<ProgramState>>,
+    program_state: Option<Vec<ProgramState<'a>>>,
 }
 
-struct ProgramState {
+struct ProgramState<'a> {
     name: String,
     pid: u32,
-    shared_memory: shmem::Shmem,
+    shared_memory: shmem::Shmem<'a, shmem::SharedMemoryHeader>,
     copy_buffer: ID3D11Texture2D,
     textures: [Option<ID3D11Texture2D>; 2],
 }
@@ -94,12 +93,12 @@ struct D3D11State {
     textures: Vec<(u32, Option<ID3D11Texture2D>, Option<ID3D11Texture2D>)>,
 }
 
-impl ApplicationHandler for App {
+impl ApplicationHandler for App<'_> {
     fn resumed(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
         let mut textures = Vec::new();
 
         let system = System::new_with_specifics(
-            RefreshKind::new().with_processes(ProcessRefreshKind::new()),
+            RefreshKind::nothing().with_processes(ProcessRefreshKind::nothing()),
         );
 
         let width = 600;
@@ -204,15 +203,12 @@ impl ApplicationHandler for App {
         //     .nonblocking(interprocess::local_socket::ListenerNonblockingMode::Accept);
         // let listener = opts.create_sync().unwrap();
 
-        let current_monitor_size = window.current_monitor().unwrap().size();
+        // let current_monitor_size = window.current_monitor().unwrap().size();
 
-        let monitor_size = (current_monitor_size.width * current_monitor_size.height) as usize;
+        // let monitor_size = (current_monitor_size.width * current_monitor_size.height) as usize;
 
-        let mut shared_mem = shmem::ShmemBuilder::new("SylvScreenShare")
-            .size(4 * monitor_size)
-            .create()
-            .unwrap();
-        shared_mem.set_owner();
+        let shared_mem = shmem::Shmem::new(c"SylvScreenShare");
+        // shared_mem.set_owner();
 
         let [dx10_down_texture, dx11_up_texture] =
             inject(process, &device, &shared_mem).expect("AAA");
@@ -284,7 +280,7 @@ impl ApplicationHandler for App {
                     let input = egui.winit.take_egui_input(window);
                     let output = egui.ctx.run(input, |ctx| {
                         egui::SidePanel::new(egui::panel::Side::Left, "new_side_panel")
-                            .frame(Frame::none().fill(Color32::WHITE))
+                            .frame(Frame::NONE.fill(Color32::WHITE))
                             .resizable(false)
                             .default_width(150.0)
                             .show(ctx, |ui| {
@@ -297,7 +293,7 @@ impl ApplicationHandler for App {
                             });
 
                         for program in program_state.iter_mut() {
-                            let header = program.shared_memory.header();
+                            let header = &program.shared_memory;
 
                             let rendering_api = header.api();
 
@@ -315,7 +311,7 @@ impl ApplicationHandler for App {
                             }
                         }
 
-                        let header = shared_mem.header();
+                        let header = &*shared_mem;
                         let rendering_api = header.api();
 
                         let (_pid, dx10_down_texture, dx11_up_texutre) = &d3d11_state.textures[0];
@@ -354,10 +350,8 @@ impl ApplicationHandler for App {
                                 )
                             };
 
-                            if !slice.is_empty() {
-                                if slice[0..4] != [0, 0, 0, 0] {
-                                    println!("{:?}", &slice[0..4])
-                                }
+                            if !slice.is_empty() && slice[0..4] != [0; 4] {
+                                println!("{:?}", &slice[0..4])
                             }
 
                             let image = if (width as usize | height as usize) == 0
@@ -435,7 +429,7 @@ impl ApplicationHandler for App {
 fn inject(
     process: &Process,
     device: &ID3D11Device,
-    shared_memory: &shmem::Shmem,
+    shared_memory: &shmem::Shmem<shmem::SharedMemoryHeader>,
 ) -> Result<[Option<ID3D11Texture2D>; 2], ()> {
     const SHARED_RIGHTS: u32 = DXGI_SHARED_RESOURCE_READ.0 | DXGI_SHARED_RESOURCE_WRITE.0;
     const NT_HANDLE_APIS: &[&str] = &["d3d11.dll", "d3d12.dll", "opengl32.dll", "vulkan-1.dll"];
@@ -475,7 +469,7 @@ fn inject(
             let resource = texture.cast::<IDXGIResource>().unwrap();
 
             let handle = unsafe { resource.GetSharedHandle().unwrap() };
-            shared_memory.header().set_shared_handle(handle.0);
+            shared_memory.set_shared_handle(handle.0);
 
             textures[0] = Some(texture);
         }
@@ -495,7 +489,7 @@ fn inject(
                     .unwrap()
             };
 
-            shared_memory.header().set_nt_shared_handle(dup_handle.0);
+            shared_memory.set_nt_shared_handle(dup_handle.0);
 
             textures[1] = Some(texture);
         }

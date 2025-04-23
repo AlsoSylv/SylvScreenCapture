@@ -1,5 +1,7 @@
+# The package has been trimmed slightly, removed depreciated features like static mut, and updated to 2024 edition
+
 [package]
-edition = "2015"
+edition = "2024"
 name = "glad-gl"
 version = "2.0.8"
 authors = ["David Herberth <github@dav1d.de>"]

@@ -138,52 +138,52 @@ unsafe extern "system" fn new_dx9_present_function(
     window: HWND,
     rgn: *const RGNDATA,
 ) -> HRESULT {
-    let this = unsafe { IDirect3DDevice9::from_raw(this) };
+    let this = unsafe { IDirect3DDevice9::from_raw_borrowed(&this).unwrap() };
 
-    if let Some(buffer) = SHARED_CPU_BUFFER.get() {
-        let header = buffer.0.header();
-        header.set_api(shmem::RenderingAPI::Dx9);
+    let header = SHARED_CPU_BUFFER.read().unwrap();
+    header.set_api(shmem::RenderingAPI::Dx9);
+    header.set_width_and_height(1920, 1080);
 
-        let Some(mut handle) = header.get_shared_handle() else {
-            let present_fn = DX9_PRESENT
-                .get()
-                .expect("The trampoline was set before this was ever called.");
+    let Some(mut handle) = header.get_shared_handle() else {
+        let present_fn = DX9_PRESENT
+            .get()
+            .expect("The trampoline was set before this was ever called.");
 
-            // SAFETY: This is the original present function to be called
-            return unsafe { (*present_fn)(this.as_raw(), src_rect, dst_rect, window, rgn) };
-        };
+        // SAFETY: This is the original present function to be called
+        return unsafe { (*present_fn)(this.as_raw(), src_rect, dst_rect, window, rgn) };
+    };
 
-        let back_buffer = unsafe { this.GetBackBuffer(0, 0, D3DBACKBUFFER_TYPE_MONO) }.unwrap();
-        let mut desc = D3DSURFACE_DESC::default();
-        unsafe { back_buffer.GetDesc(&mut desc) }.unwrap();
+    let back_buffer = unsafe { this.GetBackBuffer(0, 0, D3DBACKBUFFER_TYPE_MONO) }.unwrap();
+    let mut desc = D3DSURFACE_DESC::default();
+    unsafe { back_buffer.GetDesc(&mut desc) }.unwrap();
 
-        let buffer_width = desc.Width;
-        let buffer_height = desc.Height;
+    let buffer_width = desc.Width;
+    let buffer_height = desc.Height;
 
-        let mut out_surf = None;
+    let mut out_surf = None;
 
-        unsafe {
-            this.CreateTexture(
-                buffer_width,
-                buffer_height,
-                1,
-                D3DUSAGE_RENDERTARGET as u32,
-                D3DFMT_A8R8G8B8,
-                D3DPOOL_DEFAULT,
-                &mut out_surf,
-                &mut handle,
-            )
-        }
-        .unwrap();
-
-        let out_surf = out_surf.unwrap();
-
-        let surf = out_surf.GetSurfaceLevel(0).unwrap();
-
-        if let Err(e) = unsafe { this.GetRenderTargetData(&back_buffer, &surf) } {
-            println!("{e:?}")
-        };
+    // TODO: Figure out why this call is invalid
+    unsafe {
+        this.CreateTexture(
+            buffer_width,
+            buffer_height,
+            1,
+            D3DUSAGE_RENDERTARGET as u32,
+            D3DFMT_A8R8G8B8,
+            D3DPOOL_DEFAULT,
+            &mut out_surf,
+            &mut handle,
+        )
     }
+    .unwrap();
+
+    let out_surf = out_surf.unwrap();
+
+    let surf = out_surf.GetSurfaceLevel(0).unwrap();
+
+    if let Err(e) = unsafe { this.GetRenderTargetData(&back_buffer, &surf) } {
+        println!("{e:?}")
+    };
 
     let present_fn = DX9_PRESENT
         .get()

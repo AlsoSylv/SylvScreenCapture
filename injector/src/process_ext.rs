@@ -116,7 +116,8 @@ impl Process {
         let len = new_needed as usize / size_of::<HMODULE>();
         slice[0..len].iter().try_for_each(|module| {
             let mut name_bfr = [0; MAX_PATH as usize];
-            let len = unsafe { GetModuleFileNameExW(self.handle, *module, &mut name_bfr) };
+            let len =
+                unsafe { GetModuleFileNameExW(Some(self.handle), Some(*module), &mut name_bfr) };
 
             if len == 0 {
                 Err(windows::core::Error::from_win32())
