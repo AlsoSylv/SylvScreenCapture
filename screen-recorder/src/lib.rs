@@ -50,14 +50,6 @@ enum Reason {
     DllProcessDetach,
 }
 
-// This makes sure that drop is called on the shared buffer
-// This is really gross, lol
-#[dtor::dtor]
-fn shutdown() {
-    let mut lock = SHARED_CPU_BUFFER.write().unwrap();
-    unsafe { lock.dec_ref_count() };
-}
-
 /// This requires that the shared memory be created BEFORE the DLL is injected, but this is fine
 /// This is wrapped in a RwLock, not for safety (every operation is atomic), but so that it can be dropped
 /// When the game exits
@@ -101,6 +93,9 @@ fn main(hinst_dll: HINSTANCE, reason: Reason) -> Result<(), Error> {
         }
 
         std::thread::spawn(dll_attach);
+    } else {
+        let mut lock = SHARED_CPU_BUFFER.write().unwrap();
+        unsafe { lock.dec_ref_count() };
     };
 
     Ok(())
