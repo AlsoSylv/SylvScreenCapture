@@ -1,8 +1,8 @@
 // use interprocess::local_socket::traits::Stream as StreamTrait;
 // use interprocess::local_socket::{GenericNamespaced, Stream, ToNsName};
 use retour::{Function, RawDetour};
-use windows::core::BOOL;
 use std::ffi::c_void;
+use windows::core::BOOL;
 // use std::io::{ErrorKind, Read, Write};
 use std::sync::{LazyLock, RwLock};
 use windows::Win32::Foundation::HMODULE;
@@ -64,7 +64,7 @@ fn shutdown() {
 pub static SHARED_CPU_BUFFER: LazyLock<RwLock<shmem::Shmem<'static, shmem::SharedMemoryHeader>>> =
     LazyLock::new(|| {
         let shared_buffer = shmem::Shmem::<shmem::SharedMemoryHeader>::open(c"SylvScreenShare");
-        shared_buffer.as_ref().set_pid();
+        shared_buffer.set_pid();
         RwLock::new(shared_buffer)
     });
 
@@ -120,32 +120,13 @@ fn dll_attach() {
 
     // This is a list of APIs and their hooks, since all APIs need to be attempted to be hooked
     #[allow(unused)]
-    const MODULES: ModuleDispatchArray = &[
+    const MODULES: ModuleDispatchArray<'static> = &[
         (OGL_DLL, dll_attach_rendering_api::<impls::OpenGLHooks>),
         (D3D9_DLL, dll_attach_rendering_api::<impls::DX9Hooks>),
         (D3D10_DLL, dll_attach_rendering_api::<impls::DX10Hooks>),
         (D3D11_DLL, dll_attach_rendering_api::<impls::DX11Hooks>),
         (D3D12_DLL, dll_attach_rendering_api::<impls::DX12Hooks>),
     ];
-
-    // let name = SOCKET_NAME.to_ns_name::<GenericNamespaced>().unwrap();
-
-    // let mut try_connect = Stream::connect(name.clone());
-
-    // let mut stream = loop {
-    //     match try_connect {
-    //         Err(e) if e.kind() == ErrorKind::NotFound => {
-    //             try_connect = Stream::connect(name.clone());
-    //         }
-    //         Err(e) => {
-    //             println!("{e}");
-    //             try_connect = Stream::connect(name.clone());
-    //         }
-    //         Ok(stream) => {
-    //             break stream;
-    //         }
-    //     }
-    // };
 
     let call = unsafe { GetModuleHandleA(OGL_DLL) }
         .map_err(Error::from)

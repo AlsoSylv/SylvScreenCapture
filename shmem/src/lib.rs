@@ -1,22 +1,29 @@
 use std::{
     ffi::CStr,
+    ops::{Deref, DerefMut},
     ptr::NonNull,
-    sync::atomic::{AtomicI32, AtomicU32, AtomicU64, AtomicU8},
+    sync::atomic::{AtomicI32, AtomicU8, AtomicU32, AtomicU64},
 };
 
 use windows::Win32::Foundation::HANDLE;
 
 mod os;
 
-pub struct Shmem<'a, T> {
+pub struct Shmem<'a, T>
+where
+    T: Default,
+{
     inner: os::ShMem<'a, T>,
 }
 
 // In theory, as long as the inner type would be safe across multiple threads, the shared memory is
-unsafe impl<'a, T> Send for Shmem<'a, T> where T: Send {}
-unsafe impl<'a, T> Sync for Shmem<'a, T> where T: Sync {}
+unsafe impl<T> Send for Shmem<'_, T> where T: Send + Default {}
+unsafe impl<T> Sync for Shmem<'_, T> where T: Sync + Default {}
 
-impl<'a, T> Shmem<'a, T> {
+impl<T> Shmem<'_, T>
+where
+    T: Default,
+{
     pub fn new(name: &CStr) -> Self {
         Shmem {
             inner: os::ShMem::new(name).unwrap(),
@@ -29,18 +36,32 @@ impl<'a, T> Shmem<'a, T> {
         }
     }
 
-    pub fn as_ref(&self) -> &T {
-        self.inner.as_ref()
-    }
-
-    pub fn as_mut(&mut self) -> &mut T {
-        self.inner.as_mut()
-    }
-
+    /// # Safety
+    /// Calling this can trigger the deconstructor, and should only be called if this is the intended effect
     pub unsafe fn dec_ref_count(&mut self) {
         unsafe {
             self.inner.dec_ref_count();
         }
+    }
+}
+
+impl<T> Deref for Shmem<'_, T>
+where
+    T: Default,
+{
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        self.inner.as_ref()
+    }
+}
+
+impl<T> DerefMut for Shmem<'_, T>
+where
+    T: Default,
+{
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.inner.as_mut()
     }
 }
 

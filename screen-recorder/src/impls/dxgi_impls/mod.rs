@@ -50,15 +50,14 @@ unsafe extern "system" fn new_present_function(
         // This is used in every capture (besides GL)
         let this = unsafe { IDXGISwapChain::from_raw_borrowed(&this).unwrap() };
         // This sucks, but I don't think there's a better way to handle it.
-        let lock = crate::SHARED_CPU_BUFFER.read().unwrap();
-        let header = lock.as_ref();
+        let header = crate::SHARED_CPU_BUFFER.read().unwrap();
         // If this returns an `E_NOINTERFACE` error, that means that it is newer than DX10
-        if let Err(e) = dx10::dx10_new_present_fn(this, header) {
+        if let Err(e) = dx10::dx10_new_present_fn(this, &header) {
             if e.code() == E_NOINTERFACE {
                 // Repeat above but for DX11
-                if let Err(e) = dx11::dx11_duplicate_hook(this, header) {
+                if let Err(e) = dx11::dx11_duplicate_hook(this, &header) {
                     if e.code() == E_NOINTERFACE {
-                        if let Err(e) = dx12::dx12_duplicate_hook(this, header) {
+                        if let Err(e) = dx12::dx12_duplicate_hook(this, &header) {
                             println!("{e}")
                         }
                     }

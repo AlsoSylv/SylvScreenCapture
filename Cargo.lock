@@ -1654,7 +1654,6 @@ version = "0.1.0"
 dependencies = [
  "dtor",
  "glad-gl",
- "raw-window-handle",
  "retour",
  "shmem",
  "vulkanalia",

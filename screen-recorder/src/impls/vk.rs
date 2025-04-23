@@ -142,7 +142,7 @@ impl RenderingAPI for VkHooks {
         };
 
         for i in 0..props.memory_type_count {
-            if (1 << i & prop_flag.bits()) != 0 {
+            if (1 << i) & prop_flag.bits() != 0 {
                 mem_ty_idx = i;
             }
         }
@@ -260,9 +260,7 @@ unsafe extern "system" fn vk_new_acquire_next_image(
     let acquire_next: PFN_vkAcquireNextImageKHR =
         unsafe { std::mem::transmute(NEXT_IMAGE_DETOUR.get().unwrap().trampoline()) };
 
-    let result = unsafe { acquire_next(device, swapchain, timeout, semaphore, fence, image_index) };
-
-    result
+    unsafe { acquire_next(device, swapchain, timeout, semaphore, fence, image_index) }
 }
 
 static COMMANDS: OnceLock<DeviceCommands> = OnceLock::new();
@@ -285,8 +283,7 @@ unsafe extern "system" fn vk_new_queue_present(
     let swapchain = unsafe { &*info.swapchains };
 
     if !device.is_null() {
-        let lock = SHARED_CPU_BUFFER.read().unwrap();
-        let header = lock.as_ref();
+        let header = SHARED_CPU_BUFFER.read().unwrap();
         header.set_api(shmem::RenderingAPI::Vk);
         header.set_width_and_height(1920, 1080);
         if let (Some(shared_image), Some(command_pool)) =
@@ -443,69 +440,66 @@ unsafe extern "system" fn vk_new_queue_present(
             println!("{result}");
 
             (commands.free_command_buffers)(device, *command_pool, 1, &command_buffer);
-        } else {
-            if let Some(nt_handle) = header.get_nt_shared_handle() {
-                let mut info = ExternalMemoryImageCreateInfo::builder()
-                    .handle_types(ExternalMemoryHandleTypeFlags::D3D11_TEXTURE);
+        } else if let Some(nt_handle) = header.get_nt_shared_handle() {
+            let mut info = ExternalMemoryImageCreateInfo::builder()
+                .handle_types(ExternalMemoryHandleTypeFlags::D3D11_TEXTURE);
 
-                let info = ImageCreateInfo::builder()
-                    .image_type(ImageType::_2D)
-                    .array_layers(1)
-                    .mip_levels(1)
-                    .samples(SampleCountFlags::_1)
-                    .format(Format::R8G8B8A8_SNORM)
-                    .initial_layout(ImageLayout::TRANSFER_DST_OPTIMAL)
-                    .sharing_mode(SharingMode::EXCLUSIVE)
+            let info = ImageCreateInfo::builder()
+                .image_type(ImageType::_2D)
+                .array_layers(1)
+                .mip_levels(1)
+                .samples(SampleCountFlags::_1)
+                .format(Format::R8G8B8A8_SNORM)
+                .initial_layout(ImageLayout::TRANSFER_DST_OPTIMAL)
+                .sharing_mode(SharingMode::EXCLUSIVE)
+                .push_next(&mut info)
+                .usage(ImageUsageFlags::TRANSFER_DST | ImageUsageFlags::COLOR_ATTACHMENT)
+                .extent(Extent3D {
+                    width: 1920,
+                    height: 1080,
+                    depth: 1,
+                });
+            let mut shared_image = Image::null();
+
+            // TODO: Need a real image info struct
+            let result = (commands.create_image)(device, &*info, null(), &mut shared_image);
+
+            if result == VkResult::SUCCESS {
+                let mut ded_info = MemoryDedicatedAllocateInfoKHR::builder().image(shared_image);
+
+                let mut info = ImportMemoryWin32HandleInfoKHR::builder()
+                    .handle_type(ExternalMemoryHandleTypeFlags::D3D11_TEXTURE)
+                    .handle(nt_handle.0);
+
+                let info = MemoryAllocateInfo::builder()
+                    .allocation_size(1920 * 1080 * 4)
+                    .memory_type_index(MEM_TY_IDX.load(Ordering::SeqCst))
                     .push_next(&mut info)
-                    .usage(ImageUsageFlags::TRANSFER_DST | ImageUsageFlags::COLOR_ATTACHMENT)
-                    .extent(Extent3D {
-                        width: 1920,
-                        height: 1080,
-                        depth: 1,
-                    });
-                let mut shared_image = Image::null();
+                    .push_next(&mut ded_info);
 
-                // TODO: Need a real image info struct
-                let result = (commands.create_image)(device, &*info, null(), &mut shared_image);
+                let mut memory = DeviceMemory::null();
+
+                let result =
+                    unsafe { (commands.allocate_memory)(device, &*info, null(), &mut memory) };
+
+                println!("{result}");
+
+                let result = (commands.bind_image_memory)(device, shared_image, memory, 0);
+
+                println!("{result}");
+
+                let mut command_pool = CommandPool::null();
+
+                let info =
+                    CommandPoolCreateInfo::builder().flags(CommandPoolCreateFlags::TRANSIENT);
+                let result =
+                    (commands.create_command_pool)(device, &*info, null(), &mut command_pool);
+
+                println!("{result}");
 
                 if result == VkResult::SUCCESS {
-                    let mut ded_info =
-                        MemoryDedicatedAllocateInfoKHR::builder().image(shared_image);
-
-                    let mut info = ImportMemoryWin32HandleInfoKHR::builder()
-                        .handle_type(ExternalMemoryHandleTypeFlags::D3D11_TEXTURE)
-                        .handle(nt_handle.0);
-
-                    let info = MemoryAllocateInfo::builder()
-                        .allocation_size(1920 * 1080 * 4)
-                        .memory_type_index(MEM_TY_IDX.load(Ordering::SeqCst))
-                        .push_next(&mut info)
-                        .push_next(&mut ded_info);
-
-                    let mut memory = DeviceMemory::null();
-
-                    let result =
-                        unsafe { (commands.allocate_memory)(device, &*info, null(), &mut memory) };
-
-                    println!("{result}");
-
-                    let result = (commands.bind_image_memory)(device, shared_image, memory, 0);
-
-                    println!("{result}");
-
-                    let mut command_pool = CommandPool::null();
-
-                    let info =
-                        CommandPoolCreateInfo::builder().flags(CommandPoolCreateFlags::TRANSIENT);
-                    let result =
-                        (commands.create_command_pool)(device, &*info, null(), &mut command_pool);
-
-                    println!("{result}");
-
-                    if result == VkResult::SUCCESS {
-                        COMMAND_POOL.get_or_init(|| command_pool);
-                        SHARED_VK_BUFFER.get_or_init(|| shared_image);
-                    }
+                    COMMAND_POOL.get_or_init(|| command_pool);
+                    SHARED_VK_BUFFER.get_or_init(|| shared_image);
                 }
             }
         }

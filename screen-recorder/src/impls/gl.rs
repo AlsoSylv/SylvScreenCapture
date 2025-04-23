@@ -1,4 +1,4 @@
-use std::{mem::transmute, ptr::addr_of_mut, sync::OnceLock};
+use std::{mem::transmute, sync::OnceLock};
 
 use retour::RawDetour;
 use windows::{
@@ -53,6 +53,11 @@ impl RenderingAPI for OpenGLHooks {
     where
         Self: Sized,
     {
+        type Proc = Option<unsafe extern "system" fn() -> isize>;
+        type WglCreateContext = unsafe extern "system" fn(HDC) -> HGLRC;
+        type WglMakeCurrent = unsafe extern "system" fn(HDC, HGLRC) -> BOOL;
+        type WglGetProcAddress = unsafe extern "system" fn(PCSTR) -> Proc;
+
         let (window, window_class) = unsafe { super::create_window() }?;
 
         let dc = unsafe { GetDC(Some(window)) };
@@ -71,12 +76,6 @@ impl RenderingAPI for OpenGLHooks {
         let pixel_format_idx = unsafe { ChoosePixelFormat(dc, &pixel_format) };
 
         unsafe { SetPixelFormat(dc, pixel_format_idx, &pixel_format)? };
-
-        // God cannot save me from my sins.
-        type Proc = Option<unsafe extern "system" fn() -> isize>;
-        type WglCreateContext = unsafe extern "system" fn(HDC) -> HGLRC;
-        type WglMakeCurrent = unsafe extern "system" fn(HDC, HGLRC) -> BOOL;
-        type WglGetProcAddress = unsafe extern "system" fn(PCSTR) -> Proc;
 
         let wgl_create_context_ptr =
             unsafe { GetProcAddress(module, s!("wglCreateContext")).unwrap() };
@@ -99,20 +98,28 @@ impl RenderingAPI for OpenGLHooks {
 
         unsafe { wglMakeCurrent(dc, context).ok()? };
 
+        // TODO: Replace usage of glad with manually loaded functions?
+        // This could also mean trimming glad down to almost nothing
+        // Current functions used are listed below, all should exist with GL 2.0
+        /*
+            - CreateMemoryObjectsEXT
+            - ImportMemoryWin32HandleEXT
+            - GenTextures
+            - BindTexture
+            - TexStorageMem2DEXT
+            - CopyTexSubImage2D
+            - DeleteTextures
+            - DeleteMemoryObjectsEXT
+        */
         // Load all the GL function pointers from GLAD, this will let us use it later in the `present` hook
         glad_gl::gl::load(|func_name| {
-            // They are all ascii anyway
-            debug_assert!(func_name.is_ascii());
-            let null_terminated =
-                std::ffi::CString::new(func_name).expect("There's no null in them");
             let cast_fn = |func| func as _;
-            let cstr = PCSTR(null_terminated.as_ptr() as _);
-            let func_ptr = unsafe { wglGetProcAddress(cstr) };
+            let cstr = PCSTR(func_name.as_ptr().cast());
 
-            func_ptr.map_or_else(
-                || unsafe { GetProcAddress(module, cstr).map_or_else(std::ptr::null, cast_fn) },
-                cast_fn,
-            )
+            unsafe { wglGetProcAddress(cstr) }
+                .or_else(|| unsafe { GetProcAddress(module, cstr) })
+                .map(cast_fn)
+                .unwrap_or(std::ptr::null())
         });
 
         Ok(Self {
@@ -169,21 +176,21 @@ impl RenderingAPI for OpenGLHooks {
 unsafe extern "system" fn new_wgl_swap_buffers(un_named_1: HDC) -> BOOL {
     use glad_gl::gl;
 
+    // DXGI is only used on windows
     #[cfg(target_os = "windows")]
     {
         use super::dxgi_impls::WAS_OPENGL_CALL;
         WAS_OPENGL_CALL.store(true, std::sync::atomic::Ordering::SeqCst);
     }
 
-    let lock = crate::SHARED_CPU_BUFFER.read().unwrap();
-    let header = lock.as_ref();
+    let header = crate::SHARED_CPU_BUFFER.read().unwrap();
     header.set_api(shmem::RenderingAPI::Ogl);
     let handle = header.get_nt_shared_handle();
 
     if let Some(handle) = handle {
         let (mut memory_object, mut texture) = (0, 0);
 
-        unsafe { gl::CreateMemoryObjectsEXT(1, addr_of_mut!(memory_object)) };
+        unsafe { gl::CreateMemoryObjectsEXT(1, &raw mut memory_object) };
         // TODO: This should be replaced with `ImportMemoryFd` on Linux
         unsafe {
             gl::ImportMemoryWin32HandleEXT(
@@ -194,7 +201,7 @@ unsafe extern "system" fn new_wgl_swap_buffers(un_named_1: HDC) -> BOOL {
             )
         };
 
-        unsafe { gl::GenTextures(1, addr_of_mut!(texture)) };
+        unsafe { gl::GenTextures(1, &raw mut texture) };
         unsafe { gl::BindTexture(gl::TEXTURE_2D, texture) };
 
         unsafe {

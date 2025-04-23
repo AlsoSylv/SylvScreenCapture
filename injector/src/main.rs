@@ -1,6 +1,5 @@
 use egui::{Color32, ColorImage, Frame, Image, TextureHandle, TextureOptions};
 use shmem::RenderingAPI;
-// use interprocess::local_socket::{GenericNamespaced, Listener, ListenerOptions, ToNsName};
 use std::env;
 use std::ffi::OsStr;
 // use std::io::{Read, Write};
@@ -94,7 +93,7 @@ struct D3D11State {
     textures: Vec<(u32, Option<ID3D11Texture2D>, Option<ID3D11Texture2D>)>,
 }
 
-impl<'a> ApplicationHandler for App<'a> {
+impl ApplicationHandler for App<'_> {
     fn resumed(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
         let mut textures = Vec::new();
 
@@ -294,7 +293,7 @@ impl<'a> ApplicationHandler for App<'a> {
                             });
 
                         for program in program_state.iter_mut() {
-                            let header = program.shared_memory.as_ref();
+                            let header = &program.shared_memory;
 
                             let rendering_api = header.api();
 
@@ -312,7 +311,7 @@ impl<'a> ApplicationHandler for App<'a> {
                             }
                         }
 
-                        let header = shared_mem.as_ref();
+                        let header = &*shared_mem;
                         let rendering_api = header.api();
 
                         let (_pid, dx10_down_texture, dx11_up_texutre) = &d3d11_state.textures[0];
@@ -351,10 +350,8 @@ impl<'a> ApplicationHandler for App<'a> {
                                 )
                             };
 
-                            if !slice.is_empty() {
-                                if slice[0..4] != [0, 0, 0, 0] {
-                                    println!("{:?}", &slice[0..4])
-                                }
+                            if !slice.is_empty() && slice[0..4] != [0; 4] {
+                                println!("{:?}", &slice[0..4])
                             }
 
                             let image = if (width as usize | height as usize) == 0
@@ -472,7 +469,7 @@ fn inject(
             let resource = texture.cast::<IDXGIResource>().unwrap();
 
             let handle = unsafe { resource.GetSharedHandle().unwrap() };
-            shared_memory.as_ref().set_shared_handle(handle.0);
+            shared_memory.set_shared_handle(handle.0);
 
             textures[0] = Some(texture);
         }
@@ -492,7 +489,7 @@ fn inject(
                     .unwrap()
             };
 
-            shared_memory.as_ref().set_nt_shared_handle(dup_handle.0);
+            shared_memory.set_nt_shared_handle(dup_handle.0);
 
             textures[1] = Some(texture);
         }
