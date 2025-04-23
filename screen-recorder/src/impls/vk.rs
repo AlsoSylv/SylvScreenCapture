@@ -286,7 +286,7 @@ unsafe extern "system" fn vk_new_queue_present(
 
     if !device.is_null() {
         let lock = SHARED_CPU_BUFFER.read().unwrap();
-        let header = lock.as_ref().unwrap().as_ref();
+        let header = lock.as_ref();
         header.set_api(shmem::RenderingAPI::Vk);
         header.set_width_and_height(1920, 1080);
         if let (Some(shared_image), Some(command_pool)) =

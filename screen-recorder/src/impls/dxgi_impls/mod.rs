@@ -51,7 +51,7 @@ unsafe extern "system" fn new_present_function(
         let this = unsafe { IDXGISwapChain::from_raw_borrowed(&this).unwrap() };
         // This sucks, but I don't think there's a better way to handle it.
         let lock = crate::SHARED_CPU_BUFFER.read().unwrap();
-        let header = lock.as_ref().unwrap().as_ref();
+        let header = lock.as_ref();
         // If this returns an `E_NOINTERFACE` error, that means that it is newer than DX10
         if let Err(e) = dx10::dx10_new_present_fn(this, header) {
             if e.code() == E_NOINTERFACE {

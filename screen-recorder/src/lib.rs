@@ -1,15 +1,16 @@
 // use interprocess::local_socket::traits::Stream as StreamTrait;
 // use interprocess::local_socket::{GenericNamespaced, Stream, ToNsName};
 use retour::{Function, RawDetour};
+use windows::core::BOOL;
 use std::ffi::c_void;
 // use std::io::{ErrorKind, Read, Write};
-use std::sync::RwLock;
+use std::sync::{LazyLock, RwLock};
 use windows::Win32::Foundation::HMODULE;
 use windows::Win32::System::SystemServices;
 use windows::{
     core::{s, PCSTR},
     Win32::{
-        Foundation::{BOOL, HINSTANCE},
+        Foundation::HINSTANCE,
         System::{
             Console::AllocConsole,
             LibraryLoader::{DisableThreadLibraryCalls, GetModuleHandleA},
@@ -53,14 +54,19 @@ enum Reason {
 // This is really gross, lol
 #[dtor::dtor]
 fn shutdown() {
-    *SHARED_CPU_BUFFER.write().unwrap() = None;
+    let mut lock = SHARED_CPU_BUFFER.write().unwrap();
+    unsafe { lock.dec_ref_count() };
 }
 
 /// This requires that the shared memory be created BEFORE the DLL is injected, but this is fine
 /// This is wrapped in a RwLock, not for safety (every operation is atomic), but so that it can be dropped
 /// When the game exits
-pub static SHARED_CPU_BUFFER: RwLock<Option<shmem::Shmem<'static, shmem::SharedMemoryHeader>>> =
-    RwLock::new(None);
+pub static SHARED_CPU_BUFFER: LazyLock<RwLock<shmem::Shmem<'static, shmem::SharedMemoryHeader>>> =
+    LazyLock::new(|| {
+        let shared_buffer = shmem::Shmem::<shmem::SharedMemoryHeader>::open(c"SylvScreenShare");
+        shared_buffer.as_ref().set_pid();
+        RwLock::new(shared_buffer)
+    });
 
 // Export this main as DllMain
 #[export_name = "DllMain"]
@@ -91,7 +97,7 @@ fn main(hinst_dll: HINSTANCE, reason: Reason) -> Result<(), Error> {
         }
 
         unsafe {
-            DisableThreadLibraryCalls(hinst_dll)?;
+            DisableThreadLibraryCalls(hinst_dll.into())?;
         }
 
         std::thread::spawn(dll_attach);
@@ -140,12 +146,6 @@ fn dll_attach() {
     //         }
     //     }
     // };
-
-    *SHARED_CPU_BUFFER.write().unwrap() = {
-        let shared_buffer = shmem::Shmem::<shmem::SharedMemoryHeader>::open(c"SylvScreenShare");
-        shared_buffer.as_ref().set_pid();
-        Some(shared_buffer)
-    };
 
     let call = unsafe { GetModuleHandleA(OGL_DLL) }
         .map_err(Error::from)

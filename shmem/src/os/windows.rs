@@ -1,8 +1,4 @@
-use std::{
-    ffi::{c_void, CStr},
-    marker::PhantomData,
-    ptr::NonNull,
-};
+use std::ffi::{c_void, CStr};
 
 use windows::{
     core::{Error, PCSTR},
@@ -19,97 +15,81 @@ use super::common::View;
 
 pub struct ShMem<'a, T> {
     file_mapping: HANDLE,
-    view: NonNull<View<T>>,
-    lifetime: PhantomData<&'a mut T>,
+    view: &'a mut View<T>,
 }
 
 impl<'a, T> ShMem<'a, T> {
     pub fn new(name: &CStr) -> Result<Self, Error> {
-        let size = size_of::<View<T>>();
-        let high = ((size >> 32) & 0xFFFFFFFF) as u32;
-        let low = (size & 0xFFFFFFFF) as u32;
-
-        let mapping = unsafe {
-            CreateFileMappingA(
-                None,
-                None,
-                PAGE_READWRITE,
-                high,
-                low,
-                PCSTR::from_raw(name.as_ptr() as _),
-            )?
-        };
-
-        let view = unsafe {
-            let address = MapViewOfFile(mapping, FILE_MAP_ALL_ACCESS, 0, 0, size_of::<View<T>>());
-
-            NonNull::new(address.Value as *mut View<T>).unwrap()
-        };
-
-        unsafe {
-            view.as_ref()
-                .ref_count()
-                .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
-        };
-
-        Ok(Self {
-            file_mapping: mapping,
-            view,
-            lifetime: PhantomData,
-        })
+        Self::create_or_open(name, true)
     }
 
     pub fn open(name: &CStr) -> Result<Self, Error> {
-        let mapping = unsafe {
-            OpenFileMappingA(
-                FILE_MAP_ALL_ACCESS.0,
-                false,
-                PCSTR::from_raw(name.as_ptr() as _),
-            )?
+        Self::create_or_open(name, false)
+    }
+
+    fn create_or_open(name: &CStr, create: bool) -> Result<ShMem<'a, T>, Error> {
+        let file_mapping = if create {
+            unsafe {
+                let size = size_of::<View<T>>();
+                let high = ((size >> 32) & 0xFFFFFFFF) as u32;
+                let low = (size & 0xFFFFFFFF) as u32;
+
+                CreateFileMappingA(
+                    HANDLE::default(),
+                    None,
+                    PAGE_READWRITE,
+                    high,
+                    low,
+                    PCSTR::from_raw(name.as_ptr() as _),
+                )?
+            }
+        } else {
+            unsafe {
+                OpenFileMappingA(
+                    FILE_MAP_ALL_ACCESS.0,
+                    false,
+                    PCSTR::from_raw(name.as_ptr() as _),
+                )?
+            }
         };
 
         let view = unsafe {
-            let address = MapViewOfFile(mapping, FILE_MAP_ALL_ACCESS, 0, 0, size_of::<View<T>>());
+            let address = MapViewOfFile(
+                file_mapping,
+                FILE_MAP_ALL_ACCESS,
+                0,
+                0,
+                size_of::<View<T>>(),
+            );
 
-            NonNull::new(address.Value as *mut View<T>).unwrap()
+            if address.Value.is_null() {
+                return Err(Error::from_win32());
+            }
+
+            &mut *(address.Value as *mut View<T>)
         };
 
-        unsafe {
-            view.as_ref()
-                .ref_count()
-                .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
-        };
+        view.ref_count()
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
 
-        Ok(Self {
-            file_mapping: mapping,
-            view,
-            lifetime: PhantomData,
-        })
+        Ok(Self { file_mapping, view })
     }
 
     pub fn as_ref(&self) -> &T {
-        unsafe { self.view.as_ref().as_ref() }
+        self.view.as_ref()
     }
 
     pub fn as_mut(&mut self) -> &mut T {
-        unsafe { self.view.as_mut().as_mut() }
+        self.view.as_mut()
     }
 
-    pub unsafe fn dec_ref_count(&self) {
-        unsafe {
-            self.view.as_ref().dec_ref_count();
-        }
-    }
-}
-
-impl<'a, T> Drop for ShMem<'a, T> {
-    fn drop(&mut self) {
-        let view = unsafe { self.view.as_ref() }.ref_count();
-        let prev = view.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+    /// SAFETY: Calling this can trigger drop to be called
+    pub unsafe fn dec_ref_count(&mut self) {
+        let prev = self.view.dec_ref_count();
 
         unsafe {
             UnmapViewOfFile(MEMORY_MAPPED_VIEW_ADDRESS {
-                Value: self.view.as_mut() as *mut _ as *mut c_void,
+                Value: self.view as *mut _ as *mut c_void,
             })
             .unwrap();
         }
@@ -118,5 +98,11 @@ impl<'a, T> Drop for ShMem<'a, T> {
         if prev == 1 {
             unsafe { CloseHandle(self.file_mapping).unwrap() };
         }
+    }
+}
+
+impl<'a, T> Drop for ShMem<'a, T> {
+    fn drop(&mut self) {
+        unsafe { self.dec_ref_count() };
     }
 }

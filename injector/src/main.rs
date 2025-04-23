@@ -99,7 +99,7 @@ impl<'a> ApplicationHandler for App<'a> {
         let mut textures = Vec::new();
 
         let system = System::new_with_specifics(
-            RefreshKind::new().with_processes(ProcessRefreshKind::new()),
+            RefreshKind::nothing().with_processes(ProcessRefreshKind::nothing()),
         );
 
         let width = 600;
@@ -281,7 +281,7 @@ impl<'a> ApplicationHandler for App<'a> {
                     let input = egui.winit.take_egui_input(window);
                     let output = egui.ctx.run(input, |ctx| {
                         egui::SidePanel::new(egui::panel::Side::Left, "new_side_panel")
-                            .frame(Frame::none().fill(Color32::WHITE))
+                            .frame(Frame::NONE.fill(Color32::WHITE))
                             .resizable(false)
                             .default_width(150.0)
                             .show(ctx, |ui| {

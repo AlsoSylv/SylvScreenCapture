@@ -2,9 +2,9 @@ use std::{mem::transmute, ptr::addr_of_mut, sync::OnceLock};
 
 use retour::RawDetour;
 use windows::{
-    core::{s, PCSTR},
+    core::{s, BOOL, PCSTR},
     Win32::{
-        Foundation::{BOOL, HMODULE, HWND},
+        Foundation::{HMODULE, HWND},
         Graphics::{
             Gdi::{GetDC, HDC},
             OpenGL::{
@@ -55,7 +55,7 @@ impl RenderingAPI for OpenGLHooks {
     {
         let (window, window_class) = unsafe { super::create_window() }?;
 
-        let dc = unsafe { GetDC(window) };
+        let dc = unsafe { GetDC(Some(window)) };
 
         let pixel_format = PIXELFORMATDESCRIPTOR {
             nSize: size_of::<PIXELFORMATDESCRIPTOR>() as u16,
@@ -176,7 +176,7 @@ unsafe extern "system" fn new_wgl_swap_buffers(un_named_1: HDC) -> BOOL {
     }
 
     let lock = crate::SHARED_CPU_BUFFER.read().unwrap();
-    let header = lock.as_ref().unwrap().as_ref();
+    let header = lock.as_ref();
     header.set_api(shmem::RenderingAPI::Ogl);
     let handle = header.get_nt_shared_handle();
 

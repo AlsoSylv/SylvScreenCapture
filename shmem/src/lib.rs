@@ -37,7 +37,7 @@ impl<'a, T> Shmem<'a, T> {
         self.inner.as_mut()
     }
 
-    pub unsafe fn dec_ref_count(&self) {
+    pub unsafe fn dec_ref_count(&mut self) {
         unsafe {
             self.inner.dec_ref_count();
         }

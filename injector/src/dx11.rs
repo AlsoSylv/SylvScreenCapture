@@ -1,4 +1,4 @@
-use windows::Win32::Foundation::HWND;
+use windows::Win32::Foundation::{HMODULE, HWND};
 use windows::Win32::Graphics::Direct3D::{
     D3D_DRIVER_TYPE_UNKNOWN, D3D_FEATURE_LEVEL, D3D_FEATURE_LEVEL_11_1,
 };
@@ -58,7 +58,7 @@ pub fn create_device_and_swap_chain(
         D3D11CreateDeviceAndSwapChain(
             &adapters,
             D3D_DRIVER_TYPE_UNKNOWN,
-            None,
+            HMODULE::default(),
             D3D11_CREATE_DEVICE_DEBUG,
             Some(&[D3D_FEATURE_LEVEL_11_1]),
             D3D11_SDK_VERSION,
