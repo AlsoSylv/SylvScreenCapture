@@ -4,7 +4,6 @@ use std::{
     sync::atomic::{AtomicI32, AtomicU32, AtomicU64, AtomicU8},
 };
 
-pub use shared_memory::ShmemError;
 use windows::Win32::Foundation::HANDLE;
 
 mod os;
@@ -12,6 +11,10 @@ mod os;
 pub struct Shmem<'a, T> {
     inner: os::ShMem<'a, T>,
 }
+
+// In theory, as long as the inner type would be safe across multiple threads, the shared memory is
+unsafe impl<'a, T> Send for Shmem<'a, T> where T: Send {}
+unsafe impl<'a, T> Sync for Shmem<'a, T> where T: Sync {}
 
 impl<'a, T> Shmem<'a, T> {
     pub fn new(name: &CStr) -> Self {
@@ -32,6 +35,12 @@ impl<'a, T> Shmem<'a, T> {
 
     pub fn as_mut(&mut self) -> &mut T {
         self.inner.as_mut()
+    }
+
+    pub unsafe fn dec_ref_count(&self) {
+        unsafe {
+            self.inner.dec_ref_count();
+        }
     }
 }
 
@@ -126,7 +135,7 @@ impl SharedMemoryHeader {
 
     pub fn get_shared_handle(&self) -> Option<HANDLE> {
         let handle = NonNull::new(self.shared_handle.load(std::sync::atomic::Ordering::SeqCst)
-            as isize as *mut std::ffi::c_void);
+            as u32 as usize as isize as *mut std::ffi::c_void);
         handle.map(|ptr| HANDLE(ptr.as_ptr() as _))
     }
 

@@ -3,7 +3,7 @@
 use retour::{Function, RawDetour};
 use std::ffi::c_void;
 // use std::io::{ErrorKind, Read, Write};
-use std::sync::OnceLock;
+use std::sync::RwLock;
 use windows::Win32::Foundation::HMODULE;
 use windows::Win32::System::SystemServices;
 use windows::{
@@ -49,25 +49,18 @@ enum Reason {
     DllProcessDetach,
 }
 
-// TODO: Implement a clearer shared memory layout
-/*
-    The ideal layout in my head is
-    struct SharedMemory {
-        shared_handle: AtomicU64,
-        dimensions: AtomicU64, (hi: width: u32, lo: height: u32)
-        api: AtomicU8,
-        flip: AtomicBool,
-        ignore_alpha: AtomicBool,
-    }
-*/
-#[repr(transparent)]
-pub struct SharedMem(pub shmem::Shmem<'static, shmem::SharedMemoryHeader>);
+// This makes sure that drop is called on the shared buffer
+// This is really gross, lol
+#[dtor::dtor]
+fn shutdown() {
+    *SHARED_CPU_BUFFER.write().unwrap() = None;
+}
 
-unsafe impl Send for SharedMem {}
-unsafe impl Sync for SharedMem {}
-
-pub static SHARED_CPU_BUFFER: OnceLock<SharedMem> = OnceLock::new();
-// pub static SHARED_HANDLE: AtomicPtr<c_void> = AtomicPtr::new(null_mut());
+/// This requires that the shared memory be created BEFORE the DLL is injected, but this is fine
+/// This is wrapped in a RwLock, not for safety (every operation is atomic), but so that it can be dropped
+/// When the game exits
+pub static SHARED_CPU_BUFFER: RwLock<Option<shmem::Shmem<'static, shmem::SharedMemoryHeader>>> =
+    RwLock::new(None);
 
 // Export this main as DllMain
 #[export_name = "DllMain"]
@@ -148,11 +141,11 @@ fn dll_attach() {
     //     }
     // };
 
-    let shared_buffer = shmem::Shmem::<shmem::SharedMemoryHeader>::open(c"SylvScreenShare");
-
-    shared_buffer.as_ref().set_pid();
-
-    SHARED_CPU_BUFFER.get_or_init(|| crate::SharedMem(shared_buffer));
+    *SHARED_CPU_BUFFER.write().unwrap() = {
+        let shared_buffer = shmem::Shmem::<shmem::SharedMemoryHeader>::open(c"SylvScreenShare");
+        shared_buffer.as_ref().set_pid();
+        Some(shared_buffer)
+    };
 
     let call = unsafe { GetModuleHandleA(OGL_DLL) }
         .map_err(Error::from)

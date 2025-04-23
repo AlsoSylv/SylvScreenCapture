@@ -94,6 +94,12 @@ impl<'a, T> ShMem<'a, T> {
     pub fn as_mut(&mut self) -> &mut T {
         unsafe { self.view.as_mut().as_mut() }
     }
+
+    pub unsafe fn dec_ref_count(&self) {
+        unsafe {
+            self.view.as_ref().dec_ref_count();
+        }
+    }
 }
 
 impl<'a, T> Drop for ShMem<'a, T> {

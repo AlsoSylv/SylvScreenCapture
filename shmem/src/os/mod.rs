@@ -1,7 +1,7 @@
 #[cfg(target_os = "windows")]
-mod os;
+mod windows;
 
-pub use os::ShMem;
+pub use windows::ShMem;
 
 mod common {
     use std::sync::atomic::AtomicU8;
@@ -22,6 +22,11 @@ mod common {
 
         pub fn ref_count(&self) -> &AtomicU8 {
             &self.ref_count
+        }
+
+        pub fn dec_ref_count(&self) -> u8 {
+            self.ref_count
+                .fetch_sub(1, std::sync::atomic::Ordering::SeqCst)
         }
     }
 }
