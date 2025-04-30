@@ -123,20 +123,24 @@ pub(super) fn dx10_new_present_fn(
     header.set_api(shmem::RenderingAPI::Dx10);
 
     if let Some(shared_buffer) = SHARED_BUFFER.get() {
-        let back_buffer: ID3D10Texture2D =
-            unsafe { this.GetBuffer(0) }.expect("There's always a back buffer");
-
+        // SAFETY: The back buffer is not dropped from this
+        let back_buffer: ID3D10Texture2D = unsafe { this.GetBuffer(0) }.expect("Backbuffer exists");
+        // SAFETY: This copies from the back buffer to the shared buffer
         unsafe { device.CopyResource(shared_buffer, &back_buffer) };
     } else {
         let handle = header.get_shared_handle();
         if let Some(handle) = handle {
+            // SAFETY: This is always set later on in the code
             let mut texture = unsafe { std::mem::zeroed() };
+            // This makes sure that the game does not crash if the shared handle cannot be opened, but there is probably a better way to do this.
             if let Err(e) = unsafe {
                 device.OpenSharedResource(handle, &ID3D10Texture2D::IID, Some(&mut texture))
             } {
                 println!("{e}");
                 return Ok(());
             };
+
+            // SAFETY: This is an ID3D10Texture2D, so this is safe
             let texture = unsafe { ID3D10Texture2D::from_raw(texture) };
             SHARED_BUFFER.get_or_init(|| texture);
         }

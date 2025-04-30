@@ -1,14 +1,14 @@
 use egui::{Color32, ColorImage, Frame, Image, TextureHandle, TextureOptions};
-use shmem::RenderingAPI;
+use shmem::{RenderingAPI, SharedMemoryHeader, Shmem};
 use std::env;
-use std::ffi::OsStr;
+use std::ffi::{CStr, OsStr, OsString};
 // use std::io::{Read, Write};
 use std::sync::Arc;
-use sysinfo::{Process, ProcessRefreshKind, RefreshKind, System};
+use sysinfo::{Pid, Process, ProcessRefreshKind, RefreshKind, System};
 use windows::core::Interface;
 use windows::Win32::Graphics::Direct3D11::{
     ID3D11Device, ID3D11DeviceContext, ID3D11RenderTargetView, ID3D11Texture2D,
-    D3D11_BIND_RENDER_TARGET, D3D11_BIND_SHADER_RESOURCE, D3D11_CPU_ACCESS_READ,
+    D3D11_BIND_RENDER_TARGET, D3D11_BIND_SHADER_RESOURCE, D3D11_BOX, D3D11_CPU_ACCESS_READ,
     D3D11_MAPPED_SUBRESOURCE, D3D11_MAP_READ, D3D11_RESOURCE_MISC_SHARED,
     D3D11_RESOURCE_MISC_SHARED_NTHANDLE, D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT,
     D3D11_USAGE_STAGING,
@@ -25,11 +25,12 @@ use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use winit::window::Window;
 mod dx11;
 mod process_ext;
+mod system_ext;
 
 fn main() {
     let event_loop = winit::event_loop::EventLoop::new().unwrap();
 
-    let mut app = App::default();
+    let mut app = WinitState::default();
 
     event_loop.run_app(&mut app).unwrap();
 }
@@ -59,22 +60,168 @@ fn d3d11_texture_description(width: u32, height: u32, nt_handle: bool) -> D3D11_
 }
 
 #[derive(Default)]
-struct App<'a> {
+struct WinitState<'a> {
     window: Option<Window>,
     egui_state: Option<EguiState>,
-    new_texture: Option<ID3D11Texture2D>,
+    app_state: Option<AppState<'a>>,
     // shared_handle: Option<HANDLE>,
     // listener: Option<Listener>,
-    shared_memory: Option<shmem::Shmem<'a, shmem::SharedMemoryHeader>>,
     d3d11_state: Option<D3D11State>,
-    program_state: Option<Vec<ProgramState<'a>>>,
 }
 
-struct ProgramState<'a> {
-    name: String,
+struct AppState<'a> {
+    target_states: Vec<TargetState<'a>>,
+    display_texture: TextureHandle,
+    system: System,
+    /// This is used to copy ALL the program textures on top of each other BEFORE recording it
+    copy_buffer: ID3D11Texture2D,
+}
+
+impl AppState<'_> {
+    pub fn update(&mut self, d3d11_state: &D3D11State, ctx: &egui::Context) {
+        self.system.refresh_all();
+
+        egui::SidePanel::new(egui::panel::Side::Left, "new_side_panel")
+            .frame(Frame::NONE.fill(Color32::WHITE))
+            .resizable(false)
+            .default_width(150.0)
+            .show(ctx, |ui| {
+                let button = ui.button("Add Program");
+                if button.clicked() {
+                    let mut windows = Vec::new();
+
+                    // TODO: Enum windows here
+                    let result =
+                        system_ext::System::new()
+                            .unwrap()
+                            .enum_windows(|name, process_id| {
+                                println!("{name:?}");
+                                windows.push((name, process_id));
+                                true
+                            });
+
+                    egui::popup::popup_below_widget(
+                        ui,
+                        "Programs".into(),
+                        &button,
+                        egui::PopupCloseBehavior::CloseOnClick,
+                        |ui| {
+                            for (name, id) in windows {
+                                if !self.target_states.iter().any(|p| p.name == name) {
+                                    let watch = ui.button(name.to_string_lossy());
+
+                                    if watch.clicked() {
+                                        let process =
+                                            self.system.process(Pid::from_u32(id)).unwrap();
+                                        let (shared_mem, textures) =
+                                            inject(process, &d3d11_state.device).unwrap();
+                                        self.target_states.push(TargetState {
+                                            name,
+                                            pid: id,
+                                            shared_memory: shared_mem,
+                                            textures: textures,
+                                        });
+                                    }
+                                }
+                            }
+                        },
+                    );
+                }
+            });
+
+        for program in self.target_states.iter_mut() {
+            let header = &program.shared_memory;
+
+            if header.ref_count() == 1 {
+                todo!("Remove this shared memory, the program has closed")
+            }
+
+            let rendering_api = header.api();
+
+            // TODO: There needs to be a CPU path for DX7, 8, and 9
+            let in_use_texture = if rendering_api.nt_handle_in_use() {
+                &program.textures[0]
+            } else {
+                &program.textures[1]
+            };
+
+            if let Some(texture) = in_use_texture {
+                unsafe {
+                    let (width, height) = header.get_width_and_height();
+
+                    let src_box = D3D11_BOX {
+                        left: 0,
+                        top: 0,
+                        right: width,
+                        bottom: height,
+                        front: 0,
+                        back: 0,
+                    };
+
+                    d3d11_state.ctx.CopySubresourceRegion(
+                        &*self.copy_buffer,
+                        0,
+                        0,
+                        0,
+                        0,
+                        texture,
+                        0,
+                        Some(&src_box),
+                    );
+                }
+            }
+        }
+
+        let image = if !self.target_states.is_empty() {
+            let mut mapped_surface = D3D11_MAPPED_SUBRESOURCE::default();
+            if let Err(e) = unsafe {
+                d3d11_state.ctx.Map(
+                    &*self.copy_buffer,
+                    0,
+                    D3D11_MAP_READ,
+                    0,
+                    Some(&mut mapped_surface),
+                )
+            } {
+                println!("Error reading mapped surface: {e}");
+                return;
+            };
+
+            let (width, height) = (1920, 1080);
+
+            let slice = unsafe {
+                std::slice::from_raw_parts(
+                    mapped_surface.pData as *const u8,
+                    width as usize * height as usize * 4,
+                )
+            };
+
+            if !slice.is_empty() && slice[0..4] != [0; 4] {
+                println!("{:?}", &slice[0..4])
+            }
+
+            let image =
+                ColorImage::from_rgba_unmultiplied([width as usize, height as usize], slice);
+
+            unsafe { d3d11_state.ctx.Unmap(&*self.copy_buffer, 0) };
+
+            image
+        } else {
+            ColorImage::from_rgba_unmultiplied([1, 1], &[0, 0, 0, 255])
+        };
+        self.display_texture.set(image, TextureOptions::default());
+
+        egui::CentralPanel::default().show(ctx, |ui| {
+            let image = Image::from_texture(&self.display_texture).shrink_to_fit();
+            ui.add(image);
+        });
+    }
+}
+
+struct TargetState<'a> {
+    name: OsString,
     pid: u32,
     shared_memory: shmem::Shmem<'a, shmem::SharedMemoryHeader>,
-    copy_buffer: ID3D11Texture2D,
     textures: [Option<ID3D11Texture2D>; 2],
 }
 
@@ -82,7 +229,6 @@ struct EguiState {
     winit: egui_winit::State,
     renderer: egui_directx11::Renderer,
     ctx: egui::Context,
-    texture_handle: TextureHandle,
 }
 
 struct D3D11State {
@@ -90,20 +236,21 @@ struct D3D11State {
     render_target: Option<ID3D11RenderTargetView>,
     swap_chain: IDXGISwapChain,
     device: ID3D11Device,
-    textures: Vec<(u32, Option<ID3D11Texture2D>, Option<ID3D11Texture2D>)>,
 }
 
-impl ApplicationHandler for App<'_> {
+impl ApplicationHandler for WinitState<'_> {
     fn resumed(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
-        let mut textures = Vec::new();
-
         let system = System::new_with_specifics(
             RefreshKind::nothing().with_processes(ProcessRefreshKind::nothing()),
         );
 
-        let width = 600;
-        let height = 600;
-        let size = PhysicalSize::new(width, height);
+        let size = if let Some(window) = &self.window {
+            window.outer_size()
+        } else {
+            PhysicalSize::new(600, 600)
+        };
+
+        let PhysicalSize { width, height } = size;
 
         let window_attributes = Window::default_attributes()
             .with_title("dx-11-test")
@@ -182,37 +329,28 @@ impl ApplicationHandler for App<'_> {
             TextureOptions::default(),
         );
 
-        println!("H");
-        if env::args().nth(1).is_none() {
-            println!("Please pass the process name as first argument");
-            return;
-        }
-        let process_name = env::args().nth(1).unwrap();
+        // println!("H");
+        // if env::args().nth(1).is_none() {
+        //     println!("Please pass the process name as first argument");
+        //     return;
+        // }
+        // let process_name = env::args().nth(1).unwrap();
+        //
+        // let name = OsString::from(process_name);
+        //
+        // let process = system.processes_by_name(&name).next().unwrap();
 
-        let process = system
-            .processes_by_name(OsStr::new(&process_name))
-            .next()
-            .unwrap();
+        let target_states = Vec::new();
 
-        // let opts = ListenerOptions::new()
-        //     .name(
-        //         r"\\.\pipe\sylvias_shared_handle.sock"
-        //             .to_ns_name::<GenericNamespaced>()
-        //             .unwrap(),
-        //     )
-        //     .nonblocking(interprocess::local_socket::ListenerNonblockingMode::Accept);
-        // let listener = opts.create_sync().unwrap();
+        // let (shared_mem, textures) = inject(process, &device).expect("AAA");
 
-        // let current_monitor_size = window.current_monitor().unwrap().size();
-
-        // let monitor_size = (current_monitor_size.width * current_monitor_size.height) as usize;
-
-        let shared_mem = shmem::Shmem::new(c"SylvScreenShare");
-        // shared_mem.set_owner();
-
-        let [dx10_down_texture, dx11_up_texture] =
-            inject(process, &device, &shared_mem).expect("AAA");
-        textures.push((process.pid().as_u32(), dx10_down_texture, dx11_up_texture));
+        // target_states.push(TargetState {
+        //     name,
+        //     pid: process.pid().as_u32(),
+        //     shared_memory: shared_mem,
+        //     textures,
+        // });
+        // textures.push((process.pid().as_u32(), dx10_down_texture, dx11_up_texture));
 
         let state = Self {
             window: Some(window),
@@ -220,19 +358,20 @@ impl ApplicationHandler for App<'_> {
                 ctx: egui_ctx,
                 winit: egui_winit,
                 renderer: egui_renderer,
-                texture_handle,
             }),
-            program_state: Some(Vec::new()),
-            new_texture: Some(new_texture),
+            app_state: Some(AppState {
+                system,
+                target_states,
+                display_texture: texture_handle,
+                copy_buffer: new_texture,
+            }),
             // listener: Some(listener),
             // shared_handle: Some(shared_handle),
-            shared_memory: Some(shared_mem),
             d3d11_state: Some(D3D11State {
                 ctx: context,
                 device,
                 render_target,
                 swap_chain,
-                textures,
             }),
         };
 
@@ -247,9 +386,7 @@ impl ApplicationHandler for App<'_> {
     ) {
         let egui = self.egui_state.as_mut().unwrap();
         let window = self.window.as_mut().unwrap();
-        let new_texture = self.new_texture.as_mut().unwrap();
-        let shared_mem = self.shared_memory.as_mut().unwrap();
-        let program_state = self.program_state.as_mut().unwrap();
+        let app_state = self.app_state.as_mut().unwrap();
         // let shared_handle = self.shared_handle.as_mut().unwrap();
         // let listener = self.listener.as_mut().unwrap();
         let d3d11_state = self.d3d11_state.as_mut().unwrap();
@@ -279,114 +416,7 @@ impl ApplicationHandler for App<'_> {
                 if let Some(render_target) = &d3d11_state.render_target {
                     let input = egui.winit.take_egui_input(window);
                     let output = egui.ctx.run(input, |ctx| {
-                        egui::SidePanel::new(egui::panel::Side::Left, "new_side_panel")
-                            .frame(Frame::NONE.fill(Color32::WHITE))
-                            .resizable(false)
-                            .default_width(150.0)
-                            .show(ctx, |ui| {
-                                let button = ui.button("Record Program");
-                                if button.clicked() {
-
-                                    // TODO: Enum windows
-                                }
-                                ui.label("New Text here!!!")
-                            });
-
-                        for program in program_state.iter_mut() {
-                            let header = &program.shared_memory;
-
-                            let rendering_api = header.api();
-
-                            let in_use_texture = if rendering_api.nt_handle_in_use() {
-                                &program.textures[0]
-                            } else {
-                                &program.textures[1]
-                            };
-
-                            if let Some(texture) = in_use_texture {
-                                unsafe {
-                                    d3d11_state.ctx.CopyResource(&program.copy_buffer, texture);
-                                }
-                                // TODO: Display Texture
-                            }
-                        }
-
-                        let header = &*shared_mem;
-                        let rendering_api = header.api();
-
-                        let (_pid, dx10_down_texture, dx11_up_texutre) = &d3d11_state.textures[0];
-
-                        let in_use_texture = if rendering_api.nt_handle_in_use() {
-                            dx11_up_texutre
-                        } else {
-                            dx10_down_texture
-                        }
-                        .as_ref();
-
-                        // TODO: Check process is in use
-
-                        let image = if let Some(in_use_texture) = in_use_texture {
-                            unsafe { d3d11_state.ctx.CopyResource(&*new_texture, in_use_texture) };
-                            let mut mapped_surface = D3D11_MAPPED_SUBRESOURCE::default();
-                            if let Err(e) = unsafe {
-                                d3d11_state.ctx.Map(
-                                    &*new_texture,
-                                    0,
-                                    D3D11_MAP_READ,
-                                    0,
-                                    Some(&mut mapped_surface),
-                                )
-                            } {
-                                println!("Error reading mapped surface: {e}");
-                                return;
-                            };
-
-                            let (width, height) = header.get_width_and_height();
-
-                            let slice = unsafe {
-                                std::slice::from_raw_parts(
-                                    mapped_surface.pData as *const u8,
-                                    width as usize * height as usize * 4,
-                                )
-                            };
-
-                            if !slice.is_empty() && slice[0..4] != [0; 4] {
-                                println!("{:?}", &slice[0..4])
-                            }
-
-                            let image = if (width as usize | height as usize) == 0
-                                || header.api() == RenderingAPI::None
-                            {
-                                ColorImage::from_rgba_unmultiplied([1, 1], &[0, 0, 0, 255])
-                            } else if rendering_api.ignore_alpha() {
-                                ColorImage {
-                                    size: [width as usize, height as usize],
-                                    pixels: slice
-                                        .chunks(4)
-                                        .map(|slice| {
-                                            Color32::from_rgb(slice[2], slice[1], slice[0])
-                                        })
-                                        .collect(),
-                                }
-                            } else {
-                                ColorImage::from_rgba_unmultiplied(
-                                    [width as usize, height as usize],
-                                    slice,
-                                )
-                            };
-
-                            image
-                        } else {
-                            ColorImage::from_rgba_unmultiplied([1, 1], &[0, 0, 0, 255])
-                        };
-                        egui.texture_handle.set(image, TextureOptions::default());
-
-                        egui::CentralPanel::default().show(ctx, |ui| {
-                            let image = Image::from_texture(&egui.texture_handle).shrink_to_fit();
-                            ui.add(image);
-                        });
-
-                        unsafe { d3d11_state.ctx.Unmap(&*new_texture, 0) };
+                        app_state.update(d3d11_state, ctx);
                     });
 
                     let (render_output, platform_output, _) = egui_directx11::split_output(output);
@@ -426,16 +456,19 @@ impl ApplicationHandler for App<'_> {
     }
 }
 
-fn inject(
+fn inject<'a>(
     process: &Process,
     device: &ID3D11Device,
-    shared_memory: &shmem::Shmem<shmem::SharedMemoryHeader>,
-) -> Result<[Option<ID3D11Texture2D>; 2], ()> {
+) -> Result<(Shmem<'a, SharedMemoryHeader>, [Option<ID3D11Texture2D>; 2]), ()> {
     const SHARED_RIGHTS: u32 = DXGI_SHARED_RESOURCE_READ.0 | DXGI_SHARED_RESOURCE_WRITE.0;
     const NT_HANDLE_APIS: &[&str] = &["d3d11.dll", "d3d12.dll", "opengl32.dll", "vulkan-1.dll"];
     const HANDLE_APIS: &[&str] = &["d3d9.dll", "d3d10.dll"];
 
-    let target_process = process_ext::Process::new_with_system(process);
+    let name = format!("SylvScreenShare{}\0", process.pid().as_u32());
+    let shared_memory: Shmem<'_, SharedMemoryHeader> =
+        shmem::Shmem::new(CStr::from_bytes_with_nul(name.as_bytes()).unwrap());
+
+    let target_process = process_ext::Process::new(process);
     let mut textures = [None, None];
     let mut nt_handle = false;
     let mut handle = false;
@@ -501,7 +534,7 @@ fn inject(
 
     unsafe { target_process.load_remote_library(&dll_path) }.unwrap();
 
-    Ok(textures)
+    Ok((shared_memory, textures))
 }
 
 fn create_texture(

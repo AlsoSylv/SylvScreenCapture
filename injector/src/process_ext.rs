@@ -45,34 +45,24 @@ impl Process {
         Self::try_new(process).unwrap()
     }
 
-    pub fn new_with_system(process: &sysinfo::Process) -> Process {
-        Self::try_new_with_system(process).unwrap()
-    }
-
     pub fn try_new(process: &sysinfo::Process) -> Result<Process, windows::core::Error> {
-        Self::try_new_with_system(process)
+        let pid = process.pid().as_u32();
+        Self::try_from_pid(pid)
     }
 
-    pub fn try_new_with_system(
-        process: &sysinfo::Process,
-    ) -> Result<Process, windows::core::Error> {
-        let pid = process.pid().as_u32();
-        let process_handle = unsafe { OpenProcess(ATTACH_RIGHTS, false, pid)? };
+    pub fn current_process() -> Process {
+        let pid = std::process::id();
+
+        Self::try_from_pid(pid).unwrap()
+    }
+
+    pub fn try_from_pid(pid: u32) -> Result<Process, windows::core::Error> {
+        let process_handle = unsafe { OpenProcess(ATTACH_RIGHTS, false, pid) }?;
 
         Ok(Process {
             pid,
             handle: process_handle,
         })
-    }
-
-    pub fn current_process() -> Process {
-        let pid = std::process::id();
-        let process_handle = unsafe { OpenProcess(ATTACH_RIGHTS, false, pid) }.unwrap();
-
-        Process {
-            pid,
-            handle: process_handle,
-        }
     }
 
     pub fn iter_modules(&self, mut iter: impl FnMut(&OsStr)) -> Result<(), windows::core::Error> {

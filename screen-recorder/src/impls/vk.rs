@@ -47,6 +47,8 @@ impl RenderingAPI for VkHooks {
         self.device_commands.create_swapchain_khr as _
     }
 
+    // This is really, really bad, and needs to be cleaned up
+    // Vulkan might also need DXGI creation support, but how would that even work?
     fn create(module: HMODULE) -> Result<Self, crate::error::Error> {
         const INSTANCE_EXTENSIONS: &[*const c_char] = &[
             c"VK_KHR_external_memory_capabilities".as_ptr(),

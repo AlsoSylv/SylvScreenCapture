@@ -36,6 +36,13 @@ where
         }
     }
 
+    pub fn ref_count(&self) -> u8 {
+        self.inner
+            .view()
+            .ref_count()
+            .load(std::sync::atomic::Ordering::SeqCst)
+    }
+
     /// # Safety
     /// Calling this can trigger the deconstructor, and should only be called if this is the intended effect
     pub unsafe fn dec_ref_count(&mut self) {
@@ -65,6 +72,7 @@ where
     }
 }
 
+// Everything after this point CAN be pulled out of this crate, and should if it's going to be built into a stand alone crate
 #[derive(Default, Debug, PartialEq)]
 #[repr(u8)]
 pub enum RenderingAPI {

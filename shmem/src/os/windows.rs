@@ -103,6 +103,10 @@ where
         self.view.as_mut()
     }
 
+    pub fn view(&self) -> &View<T> {
+        &self.view
+    }
+
     /// #Safety
     /// Calling this can trigger drop to be called
     /// This should only ever be called ONCE per program, either on shutdown or when the memory is no longer in use

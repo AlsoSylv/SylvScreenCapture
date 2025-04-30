@@ -23,6 +23,12 @@ use error::Error;
 mod error;
 mod impls;
 
+/*
+TODO: there needs to be support for more than one present fn
+This could either take the form of passing an array via const generic or assoc consts
+Or this could use a slice, though I don't think that would work given the fact that a detour
+And trampoline function are required
+*/
 pub trait RenderingAPI: Sized {
     type PresentFn: Function;
     type ResizeFn: Function;
@@ -55,7 +61,13 @@ enum Reason {
 /// When the game exits
 pub static SHARED_CPU_BUFFER: LazyLock<RwLock<shmem::Shmem<'static, shmem::SharedMemoryHeader>>> =
     LazyLock::new(|| {
-        let shared_buffer = shmem::Shmem::<shmem::SharedMemoryHeader>::open(c"SylvScreenShare");
+        use std::io::Write;
+
+        const START: &str = "SylvScreenShare";
+        let mut name = [0; START.len() + 11];
+        write!(name.as_mut_slice(), "{START}{}", std::process::id()).unwrap();
+        let name = std::ffi::CStr::from_bytes_until_nul(&name).unwrap();
+        let shared_buffer = shmem::Shmem::<shmem::SharedMemoryHeader>::open(name);
         shared_buffer.set_pid();
         RwLock::new(shared_buffer)
     });
@@ -95,6 +107,7 @@ fn main(hinst_dll: HINSTANCE, reason: Reason) -> Result<(), Error> {
         std::thread::spawn(dll_attach);
     } else {
         let mut lock = SHARED_CPU_BUFFER.write().unwrap();
+        lock.set_api(shmem::RenderingAPI::None);
         unsafe { lock.dec_ref_count() };
     };
 
