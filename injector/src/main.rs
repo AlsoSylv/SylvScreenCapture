@@ -86,46 +86,34 @@ impl AppState<'_> {
             .resizable(false)
             .default_width(150.0)
             .show(ctx, |ui| {
-                let button = ui.button("Add Program");
-                if button.clicked() {
-                    let mut windows = Vec::new();
+                let mut windows = Vec::new();
 
-                    // TODO: Enum windows here
-                    let result =
-                        system_ext::System::new()
-                            .unwrap()
-                            .enum_windows(|name, process_id| {
-                                println!("{name:?}");
-                                windows.push((name, process_id));
-                                true
-                            });
+                // TODO: Enum windows here
+                let result = system_ext::System::new()
+                    .unwrap()
+                    .enum_windows(|name, process_id| {
+                        // println!("{name:?}");
 
-                    egui::popup::popup_below_widget(
-                        ui,
-                        "Programs".into(),
-                        &button,
-                        egui::PopupCloseBehavior::CloseOnClick,
-                        |ui| {
-                            for (name, id) in windows {
-                                if !self.target_states.iter().any(|p| p.name == name) {
-                                    let watch = ui.button(name.to_string_lossy());
+                        windows.push((name, process_id));
+                        true
+                    })
+                    .unwrap();
 
-                                    if watch.clicked() {
-                                        let process =
-                                            self.system.process(Pid::from_u32(id)).unwrap();
-                                        let (shared_mem, textures) =
-                                            inject(process, &d3d11_state.device).unwrap();
-                                        self.target_states.push(TargetState {
-                                            name,
-                                            pid: id,
-                                            shared_memory: shared_mem,
-                                            textures: textures,
-                                        });
-                                    }
-                                }
-                            }
-                        },
-                    );
+                for (name, id) in windows {
+                    let watch = ui.button(name.to_string_lossy());
+
+                    if watch.clicked() {
+                        println!("Fuck");
+
+                        let process = self.system.process(Pid::from_u32(id)).unwrap();
+                        let (shared_mem, textures) = inject(process, &d3d11_state.device).unwrap();
+                        self.target_states.push(TargetState {
+                            name,
+                            pid: id,
+                            shared_memory: shared_mem,
+                            textures: textures,
+                        });
+                    }
                 }
             });
 
@@ -133,16 +121,16 @@ impl AppState<'_> {
             let header = &program.shared_memory;
 
             if header.ref_count() == 1 {
-                todo!("Remove this shared memory, the program has closed")
+                // todo!("Remove this shared memory, the program has closed")
             }
 
             let rendering_api = header.api();
 
             // TODO: There needs to be a CPU path for DX7, 8, and 9
             let in_use_texture = if rendering_api.nt_handle_in_use() {
-                &program.textures[0]
-            } else {
                 &program.textures[1]
+            } else {
+                &program.textures[0]
             };
 
             if let Some(texture) = in_use_texture {
@@ -158,15 +146,9 @@ impl AppState<'_> {
                         back: 0,
                     };
 
-                    d3d11_state.ctx.CopySubresourceRegion(
+                    d3d11_state.ctx.CopyResource(
                         &*self.copy_buffer,
-                        0,
-                        0,
-                        0,
-                        0,
                         texture,
-                        0,
-                        Some(&src_box),
                     );
                 }
             }
@@ -390,6 +372,12 @@ impl ApplicationHandler for WinitState<'_> {
         // let shared_handle = self.shared_handle.as_mut().unwrap();
         // let listener = self.listener.as_mut().unwrap();
         let d3d11_state = self.d3d11_state.as_mut().unwrap();
+
+        let response  = egui.winit.on_window_event(window, &event);
+
+        if response.consumed {
+            return;
+        }
 
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),

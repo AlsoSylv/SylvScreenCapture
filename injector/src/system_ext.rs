@@ -6,12 +6,14 @@ use windows::{
         Foundation::{SetLastError, HWND, LPARAM, WIN32_ERROR},
         UI::WindowsAndMessaging::{
             EnumWindows, GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId,
+            IsWindowVisible,
         },
     },
 };
 
 macro_rules! try_win32 {
     ($win32_call:expr) => {{
+        SetLastError(WIN32_ERROR(0));
         let err = $win32_call;
         if err == 0 {
             let err = windows::core::Error::from_win32();
@@ -44,10 +46,18 @@ impl System {
 
             let callback: CallbackPtr = std::ptr::with_exposed_provenance_mut(value.0 as usize);
 
+            if !IsWindowVisible(id).as_bool() {
+                return true.into();
+            }
+
             let mut process_id = 0;
             try_win32!(GetWindowThreadProcessId(id, Some(&mut process_id)));
 
             let title_len = try_win32!(GetWindowTextLengthW(id)) as usize;
+
+            if title_len == 0 {
+                return true.into();
+            }
 
             let title_buffer: &mut [u16] = if title_len > MAX_PATH {
                 &mut vec![0; title_len + 1]
