@@ -97,7 +97,9 @@ fn main(hinst_dll: HINSTANCE, reason: Reason) -> Result<(), Error> {
     if reason == Reason::DllProcessAttach {
         // #[cfg(debug_assertions)]
         unsafe {
-            AllocConsole()?;
+            if let Err(e) = AllocConsole() {
+                eprintln!("{e:?}")
+            }
         }
 
         unsafe {
@@ -134,35 +136,36 @@ fn dll_attach() {
         (D3D10_DLL, dll_attach_rendering_api::<impls::DX10Hooks>),
         (D3D11_DLL, dll_attach_rendering_api::<impls::DX11Hooks>),
         (D3D12_DLL, dll_attach_rendering_api::<impls::DX12Hooks>),
+        (VK_DLL, dll_attach_rendering_api::<impls::VkHooks>),
     ];
 
-    let call = unsafe { GetModuleHandleA(OGL_DLL) }
-        .map_err(Error::from)
-        .and_then(dll_attach_rendering_api::<impls::OpenGLHooks>);
-    if let Err(e) = call {
-        println!("{e}");
-    }
+    // let call = unsafe { GetModuleHandleA(OGL_DLL) }
+    //     .map_err(Error::from)
+    //     .and_then(dll_attach_rendering_api::<impls::OpenGLHooks>);
+    // if let Err(e) = call {
+    //     println!("{e}");
+    // }
 
-    let call = unsafe { GetModuleHandleA(D3D9_DLL) }
-        .map_err(Error::from)
-        .and_then(dll_attach_rendering_api::<impls::DX9Hooks>);
-    if let Err(e) = call {
-        println!("{e}");
-    }
+    // let call = unsafe { GetModuleHandleA(D3D9_DLL) }
+    //     .map_err(Error::from)
+    //     .and_then(dll_attach_rendering_api::<impls::DX9Hooks>);
+    // if let Err(e) = call {
+    //     println!("{e}");
+    // }
 
-    let call = unsafe { GetModuleHandleA(D3D10_DLL) }
-        .map_err(Error::from)
-        .and_then(dll_attach_rendering_api::<impls::DX10Hooks>);
-    if let Err(e) = call {
-        println!("{e}");
-    }
+    // let call = unsafe { GetModuleHandleA(D3D10_DLL) }
+    //     .map_err(Error::from)
+    //     .and_then(dll_attach_rendering_api::<impls::DX10Hooks>);
+    // if let Err(e) = call {
+    //     println!("{e}");
+    // }
 
-    let call = unsafe { GetModuleHandleA(D3D11_DLL) }
-        .map_err(Error::from)
-        .and_then(dll_attach_rendering_api::<impls::DX11Hooks>);
-    if let Err(e) = call {
-        println!("{e}");
-    }
+    // let call = unsafe { GetModuleHandleA(D3D11_DLL) }
+    //     .map_err(Error::from)
+    //     .and_then(dll_attach_rendering_api::<impls::DX11Hooks>);
+    // if let Err(e) = call {
+    //     println!("{e}");
+    // }
 
     // let call = unsafe { GetModuleHandleA(D3D12_DLL) }
     //     .map_err(Error::from)

@@ -1,5 +1,5 @@
 [workspace]
-members = ["injector", "screen-recorder", "glad-gl", "shmem"]
+members = ["injector", "screen_recorder", "glad-gl", "shmem", "load_library_getter"]
 resolver = "2"
 
 [workspace.dependencies]
@@ -30,3 +30,9 @@ features = [
     "Win32_Graphics_Dxgi_Common",
     "Win32_Graphics_Direct3D12",
 ]
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"

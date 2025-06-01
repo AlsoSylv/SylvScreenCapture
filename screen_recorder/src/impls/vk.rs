@@ -293,8 +293,6 @@ unsafe extern "system" fn vk_new_queue_present(
         {
             let result = (commands.queue_wait_idle)(queue);
 
-            println!("await queue: {result}");
-
             let mut command_buffer = CommandBuffer::null();
 
             let info = CommandBufferAllocateInfo::builder()
@@ -350,7 +348,7 @@ unsafe extern "system" fn vk_new_queue_present(
 
             (commands.cmd_pipeline_barrier)(
                 command_buffer,
-                PipelineStageFlags::TRANSFER,
+                PipelineStageFlags::BOTTOM_OF_PIPE,
                 PipelineStageFlags::TRANSFER,
                 DependencyFlags::empty(),
                 0,
@@ -365,14 +363,19 @@ unsafe extern "system" fn vk_new_queue_present(
                 .dst_subresource(ImageSubresourceLayers {
                     base_array_layer: 0,
                     aspect_mask: ImageAspectFlags::COLOR,
-                    mip_level: 1,
+                    mip_level: 0,
                     layer_count: 1,
                 })
                 .src_subresource(ImageSubresourceLayers {
                     base_array_layer: 0,
                     aspect_mask: ImageAspectFlags::COLOR,
-                    mip_level: 1,
+                    mip_level: 0,
                     layer_count: 1,
+                })
+                .extent(vk::Extent3D {
+                    width: 1920,
+                    height: 1080,
+                    depth: 1
                 });
 
             (commands.cmd_copy_image)(
@@ -384,8 +387,6 @@ unsafe extern "system" fn vk_new_queue_present(
                 1,
                 &*image_copy,
             );
-
-            (commands.cmd_execute_commands)(command_buffer, 0, null());
 
             let memory_barrier = vk::ImageMemoryBarrier::builder()
                 .old_layout(ImageLayout::TRANSFER_SRC_OPTIMAL)
@@ -406,7 +407,7 @@ unsafe extern "system" fn vk_new_queue_present(
             (commands.cmd_pipeline_barrier)(
                 command_buffer,
                 PipelineStageFlags::TRANSFER,
-                PipelineStageFlags::DRAW_INDIRECT,
+                PipelineStageFlags::BOTTOM_OF_PIPE,
                 DependencyFlags::DEVICE_GROUP,
                 0,
                 null(),
@@ -418,30 +419,19 @@ unsafe extern "system" fn vk_new_queue_present(
 
             let result = (commands.end_command_buffer)(command_buffer);
 
-            println!("{result}");
-
             let buffers = &[command_buffer];
 
             let submit_info = vk::SubmitInfo::builder().command_buffers(buffers);
 
-            let mut fence = vk::Fence::null();
-
-            let result = unsafe {
-                (commands.create_fence)(device, &vk::FenceCreateInfo::default(), null(), &mut fence)
-            };
-
-            println!("Create fence: {result}");
-
-            let result = (commands.queue_submit)(queue, 1, &*submit_info, fence);
-
-            println!("{result}");
+            let result = (commands.queue_submit)(queue, 1, &*submit_info, vk::Fence::null());
 
             let result =
-                unsafe { (commands.wait_for_fences)(device, 1, &fence, vk::TRUE, u64::MAX) };
+                unsafe { (commands.queue_wait_idle)(queue) };
 
-            println!("{result}");
-
+            // TODO: Reuse fence
+            // TODO: Reuse command buffer
             (commands.free_command_buffers)(device, *command_pool, 1, &command_buffer);
+            ((commands.reset_command_pool)(device, *command_pool, vk::CommandPoolResetFlags::RELEASE_RESOURCES));
         } else if let Some(nt_handle) = header.get_nt_shared_handle() {
             let mut info = ExternalMemoryImageCreateInfo::builder()
                 .handle_types(ExternalMemoryHandleTypeFlags::D3D11_TEXTURE);
@@ -449,9 +439,9 @@ unsafe extern "system" fn vk_new_queue_present(
             let info = ImageCreateInfo::builder()
                 .image_type(ImageType::_2D)
                 .array_layers(1)
-                .mip_levels(1)
+                .mip_levels(0)
                 .samples(SampleCountFlags::_1)
-                .format(Format::R8G8B8A8_SNORM)
+                .format(Format::R8G8B8A8_UNORM)
                 .initial_layout(ImageLayout::TRANSFER_DST_OPTIMAL)
                 .sharing_mode(SharingMode::EXCLUSIVE)
                 .push_next(&mut info)
@@ -463,7 +453,6 @@ unsafe extern "system" fn vk_new_queue_present(
                 });
             let mut shared_image = Image::null();
 
-            // TODO: Need a real image info struct
             let result = (commands.create_image)(device, &*info, null(), &mut shared_image);
 
             if result == VkResult::SUCCESS {

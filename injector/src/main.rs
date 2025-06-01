@@ -1,4 +1,5 @@
-use egui::{Color32, ColorImage, Frame, Image, TextureHandle, TextureOptions};
+use egui::load::SizedTexture;
+use egui::{Color32, ColorImage, Frame, Image, TextureHandle, TextureId, TextureOptions};
 use shmem::{RenderingAPI, SharedMemoryHeader, Shmem};
 use std::env;
 use std::ffi::{CStr, OsStr, OsString};
@@ -28,6 +29,9 @@ mod process_ext;
 mod system_ext;
 
 fn main() {
+    // println!("{}", (windows_sys::Win32::System::LibraryLoader::LoadLibraryW as *const ()).expose_provenance());
+    // return;
+
     let event_loop = winit::event_loop::EventLoop::new().unwrap();
 
     let mut app = WinitState::default();
@@ -89,7 +93,7 @@ impl AppState<'_> {
                 let mut windows = Vec::new();
 
                 // TODO: Enum windows here
-                let result = system_ext::System::new()
+                system_ext::System::new()
                     .unwrap()
                     .enum_windows(|name, process_id| {
                         // println!("{name:?}");
@@ -111,13 +115,15 @@ impl AppState<'_> {
                             name,
                             pid: id,
                             shared_memory: shared_mem,
-                            textures: textures,
+                            textures,
                         });
                     }
                 }
             });
 
         for program in self.target_states.iter_mut() {
+            println!("{:?}", program.name);
+
             let header = &program.shared_memory;
 
             if header.ref_count() == 1 {
@@ -146,10 +152,7 @@ impl AppState<'_> {
                         back: 0,
                     };
 
-                    d3d11_state.ctx.CopyResource(
-                        &*self.copy_buffer,
-                        texture,
-                    );
+                    d3d11_state.ctx.CopyResource(&*self.copy_buffer, texture);
                 }
             }
         }
@@ -172,14 +175,18 @@ impl AppState<'_> {
             let (width, height) = (1920, 1080);
 
             let slice = unsafe {
-                std::slice::from_raw_parts(
-                    mapped_surface.pData as *const u8,
+                std::slice::from_raw_parts_mut(
+                    mapped_surface.pData as *mut u8,
                     width as usize * height as usize * 4,
                 )
             };
 
             if !slice.is_empty() && slice[0..4] != [0; 4] {
                 println!("{:?}", &slice[0..4])
+            }
+
+           for i in 0..(slice.len() / 4) {
+                slice[3 + i * 4] = 255;
             }
 
             let image =
@@ -373,7 +380,7 @@ impl ApplicationHandler for WinitState<'_> {
         // let listener = self.listener.as_mut().unwrap();
         let d3d11_state = self.d3d11_state.as_mut().unwrap();
 
-        let response  = egui.winit.on_window_event(window, &event);
+        let response = egui.winit.on_window_event(window, &event);
 
         if response.consumed {
             return;
@@ -459,14 +466,14 @@ fn inject<'a>(
     let target_process = process_ext::Process::new(process);
     let mut textures = [None, None];
     let mut nt_handle = false;
-    let mut handle = false;
+    let mut handle = true;
 
     target_process
         .iter_modules(|ostr| {
             let dll_name = std::path::Path::new(ostr).file_name().unwrap();
 
             for api in NT_HANDLE_APIS {
-                if dll_name == *api {
+                if dll_name.to_ascii_lowercase() == *api {
                     nt_handle |= true;
                     break;
                 }
@@ -518,7 +525,11 @@ fn inject<'a>(
 
     let mut dll_path = env::current_exe().unwrap();
     dll_path.pop();
-    dll_path.push("screen_recorder.dll");
+    dll_path.pop();
+    dll_path.pop();
+    dll_path.push("screen_recorder_64.dll");
+
+    println!("{dll_path:?}");
 
     unsafe { target_process.load_remote_library(&dll_path) }.unwrap();
 

@@ -5,7 +5,7 @@ use shmem::SharedMemoryHeader;
 use windows::{
     core::{s, Interface, HRESULT},
     Win32::{
-        Foundation::{HMODULE, HWND},
+        Foundation::{E_NOINTERFACE, HMODULE, HWND},
         Graphics::{
             Direct3D10::{
                 ID3D10Device, ID3D10Device1, ID3D10Texture2D, D3D10_DRIVER_TYPE,
@@ -118,6 +118,11 @@ pub(super) fn dx10_new_present_fn(
     header: &SharedMemoryHeader,
 ) -> Result<(), windows::core::Error> {
     static SHARED_BUFFER: OnceLock<ID3D10Texture2D> = OnceLock::new();
+
+    // DX10 is not used
+    if DETOUR.get().is_none() {
+        return Err(windows::core::Error::new(E_NOINTERFACE, ""));
+    }
 
     let device: ID3D10Device = unsafe { this.GetDevice() }?;
     header.set_api(shmem::RenderingAPI::Dx10);

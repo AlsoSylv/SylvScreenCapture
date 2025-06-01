@@ -36,7 +36,10 @@ where
     fn create_or_open(name: &CStr, create: bool) -> Result<ShMem<'a, T>, Error> {
         let file_mapping = if create {
             let size = size_of::<View<T>>();
+            #[cfg(target_pointer_width = "64")]
             let high = (size >> 32) as u32;
+            #[cfg(target_pointer_width = "32")]
+            let high = 0;
             let low = size as u32;
 
             // SAFETY: The mapped file must be the length of the View<T> type and needs to be created here

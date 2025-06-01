@@ -5,7 +5,7 @@ use shmem::SharedMemoryHeader;
 use std::mem::transmute;
 use std::sync::OnceLock;
 use windows::core::{s, Interface, HRESULT};
-use windows::Win32::Foundation::{HMODULE, HWND};
+use windows::Win32::Foundation::{E_NOINTERFACE, HMODULE, HWND};
 use windows::Win32::Graphics::Direct3D::{
     D3D_DRIVER_TYPE, D3D_DRIVER_TYPE_HARDWARE, D3D_FEATURE_LEVEL,
 };
@@ -121,6 +121,11 @@ pub(super) fn dx11_duplicate_hook(
     header: &SharedMemoryHeader,
 ) -> Result<(), windows::core::Error> {
     static SHARED_BUFFER: OnceLock<ID3D11Texture2D> = OnceLock::new();
+
+    // DX10 is not used
+    if DETOUR.get().is_none() {
+        return Err(windows::core::Error::new(E_NOINTERFACE, ""));
+    }
 
     let device: ID3D11Device = unsafe { this.GetDevice() }?;
     let device_1: ID3D11Device1 = device

@@ -5,7 +5,7 @@ use shmem::SharedMemoryHeader;
 use windows::{
     core::{s, Interface},
     Win32::{
-        Foundation::HWND,
+        Foundation::{E_NOINTERFACE, HWND},
         Graphics::{
             Direct3D::{D3D_FEATURE_LEVEL, D3D_FEATURE_LEVEL_12_0},
             Direct3D12::{
@@ -170,6 +170,11 @@ pub(super) fn dx12_duplicate_hook(
         ID3D12CommandAllocator,
         ID3D12GraphicsCommandList,
     )> = OnceLock::new();
+
+    // DX10 is not used
+    if DETOUR.get().is_none() {
+        return Err(windows::core::Error::new(E_NOINTERFACE, ""));
+    }
 
     let device: ID3D12Device = unsafe { this.GetDevice() }?;
     header.set_api(shmem::RenderingAPI::Dx12);

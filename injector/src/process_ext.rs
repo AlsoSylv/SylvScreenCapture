@@ -1,6 +1,7 @@
 use std::{
     ffi::{OsStr, OsString},
     path::Path,
+    process::Stdio,
     ptr::null_mut,
 };
 
@@ -76,7 +77,7 @@ impl Process {
                 null_mut(),
                 0,
                 &mut needed,
-                ENUM_PROCESS_MODULES_EX_FLAGS(0),
+                ENUM_PROCESS_MODULES_EX_FLAGS(3),
             )?
         };
 
@@ -97,7 +98,7 @@ impl Process {
                 slice_ptr,
                 size_of_val(slice) as u32,
                 &mut new_needed,
-                ENUM_PROCESS_MODULES_EX_FLAGS(0),
+                ENUM_PROCESS_MODULES_EX_FLAGS(3),
             )?
         }
 
@@ -164,9 +165,22 @@ impl Process {
         const KERNEL_32_DLL: windows::core::PCWSTR = w!("kernel32.dll");
         const LOAD_LIBRARY_A_C: windows::core::PCSTR = s!("LoadLibraryW");
 
-        let module = unsafe { GetModuleHandleW(KERNEL_32_DLL) }?;
-        let load_library_ptr = unsafe { GetProcAddress(module, LOAD_LIBRARY_A_C) }
-            .expect("kernel32.dll always contains LoadLibraryW");
+        // let module = unsafe { GetModuleHandleW(KERNEL_32_DLL) }?;
+        let load_library_ptr = std::process::Command::new("./load_library_getter_64.exe")
+            .stdout(Stdio::piped())
+            .output()
+            .unwrap();
+        println!("Getter: {load_library_ptr:?}");
+        let load_library_ptr: usize = String::from_utf8(load_library_ptr.stdout)
+            .unwrap()
+            .parse()
+            .unwrap();
+        println!("Getter: {}", load_library_ptr);
+
+        // let load_library_ptr = unsafe { GetProcAddress(module, LOAD_LIBRARY_A_C) }
+        //     .expect("kernel32.dll always contains LoadLibraryW");
+
+        // println!("Real: {}", load_library_ptr as usize);
         // Encode it as null terminated UTF-16
         let utf_16 = os_str_to_pcwstr(library_path.as_os_str());
         // This means that the size of the alloc is size_of::<u16> * length of slice

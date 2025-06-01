@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-sysinfo = { git = "https://github.com/GuillaumeGomez/sysinfo.git", rev = "0405079" }
+sysinfo = { version = "0.35" }
 winit = { version = "0.30.9", features = ["rwh_06"] }
 egui-directx11 = "0.7.0"
 egui = "0.31.0"
