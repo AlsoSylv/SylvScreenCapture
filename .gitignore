@@ -1,6 +1,6 @@
 /target
 /.vs
-./load_library_getter_32.exe
-./load_library_getter_64.exe
-./screen_recorder_32.dll
-./screen_recorder_64.dll
+load_library_getter_32.exe
+load_library_getter_64.exe
+screen_recorder_32.dll
+screen_recorder_64.dll
