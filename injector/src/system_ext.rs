@@ -13,12 +13,12 @@ use windows::{
 
 macro_rules! try_win32 {
     ($win32_call:expr) => {{
-        SetLastError(WIN32_ERROR(0));
+        unsafe { SetLastError(WIN32_ERROR(0)) };
         let err = $win32_call;
         if err == 0 {
             let err = windows::core::Error::from_win32();
             if err.code().0 != 0 {
-                SetLastError(WIN32_ERROR(err.code().0 as u32));
+                unsafe { SetLastError(WIN32_ERROR(err.code().0 as u32)) };
                 return false.into();
             }
         }
@@ -46,14 +46,14 @@ impl System {
 
             let callback: CallbackPtr = std::ptr::with_exposed_provenance_mut(value.0 as usize);
 
-            if !IsWindowVisible(id).as_bool() {
+            if !unsafe { IsWindowVisible(id).as_bool() } {
                 return true.into();
             }
 
             let mut process_id = 0;
-            try_win32!(GetWindowThreadProcessId(id, Some(&mut process_id)));
+            try_win32!(unsafe { GetWindowThreadProcessId(id, Some(&mut process_id)) });
 
-            let title_len = try_win32!(GetWindowTextLengthW(id)) as usize;
+            let title_len = try_win32!(unsafe { GetWindowTextLengthW(id) }) as usize;
 
             if title_len == 0 {
                 return true.into();
@@ -65,7 +65,7 @@ impl System {
                 &mut [0; MAX_PATH]
             };
 
-            try_win32!(GetWindowTextW(id, title_buffer));
+            try_win32!(unsafe { GetWindowTextW(id, title_buffer) });
 
             let name = OsString::from_wide(&title_buffer[..title_len]);
 

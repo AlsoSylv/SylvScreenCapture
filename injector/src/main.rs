@@ -1,8 +1,7 @@
-use egui::load::SizedTexture;
-use egui::{Color32, ColorImage, Frame, Image, TextureHandle, TextureId, TextureOptions};
-use shmem::{RenderingAPI, SharedMemoryHeader, Shmem};
+use egui::{Color32, ColorImage, Frame, Image, TextureHandle, TextureOptions};
+use shmem::{SharedMemoryHeader, Shmem};
 use std::env;
-use std::ffi::{CStr, OsStr, OsString};
+use std::ffi::{CStr, OsString};
 // use std::io::{Read, Write};
 use std::sync::Arc;
 use sysinfo::{Pid, Process, ProcessRefreshKind, RefreshKind, System};
@@ -185,7 +184,7 @@ impl AppState<'_> {
                 println!("{:?}", &slice[0..4])
             }
 
-           for i in 0..(slice.len() / 4) {
+            for i in 0..(slice.len() / 4) {
                 slice[3 + i * 4] = 255;
             }
 

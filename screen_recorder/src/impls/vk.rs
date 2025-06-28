@@ -3,11 +3,11 @@ use crate::{RenderingAPI, SHARED_CPU_BUFFER};
 use retour::RawDetour;
 use std::ffi::c_char;
 use std::ptr::{null, null_mut};
-use std::sync::atomic::{AtomicPtr, AtomicU32, AtomicUsize, Ordering};
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicPtr, AtomicU32, AtomicUsize, Ordering};
 use vulkanalia::vk::{
     self, CommandBuffer, CommandBufferAllocateInfo, CommandBufferBeginInfo, CommandBufferLevel,
-    CommandBufferUsageFlags, CommandPool, CommandPoolCreateFlags, CommandPoolCreateInfo,
+    CommandBufferResetFlags, CommandPool, CommandPoolCreateFlags, CommandPoolCreateInfo,
     DependencyFlags, DeviceCommands, DeviceCreateInfo, DeviceMemory, Extent3D,
     ExternalMemoryHandleTypeFlags, ExternalMemoryImageCreateInfo, Fence, Format, Handle,
     HasBuilder, Image, ImageAspectFlags, ImageCopy, ImageCreateInfo, ImageLayout,
@@ -19,9 +19,9 @@ use vulkanalia::vk::{
     PresentInfoKHR, Queue, Result as VkResult, SampleCountFlags, Semaphore, SharingMode,
     SwapchainKHR,
 };
-use windows::core::s;
 use windows::Win32::Foundation::HMODULE;
 use windows::Win32::System::LibraryLoader::GetProcAddress;
+use windows::core::s;
 
 static VK_PRESENT: OnceLock<<VkHooks as RenderingAPI>::PresentFn> = OnceLock::new();
 static DETOUR: OnceLock<RawDetour> = OnceLock::new();
@@ -244,7 +244,7 @@ unsafe extern "system" fn vk_new_get_swapchain_images(
     let get_images: PFN_vkGetSwapchainImagesKHR =
         unsafe { std::mem::transmute(GET_SWAPCHAIN_IMAGES.get().unwrap().trampoline()) };
 
-    get_images(device, swapchain, swapchain_image_count, swapchain_images)
+    unsafe { get_images(device, swapchain, swapchain_image_count, swapchain_images) }
 }
 
 unsafe extern "system" fn vk_new_acquire_next_image(
@@ -274,6 +274,7 @@ unsafe extern "system" fn vk_new_queue_present(
     static SHARED_VK_BUFFER: OnceLock<vk::Image> = OnceLock::new();
     static COMMAND_POOL: OnceLock<CommandPool> = OnceLock::new();
     static IMAGES: OnceLock<Box<[vk::Image]>> = OnceLock::new();
+    static COMMAND_BUFFER: OnceLock<vk::CommandBuffer> = OnceLock::new();
 
     WAS_OPENGL_CALL.store(true, Ordering::SeqCst);
 
@@ -288,42 +289,53 @@ unsafe extern "system" fn vk_new_queue_present(
         let header = SHARED_CPU_BUFFER.read().unwrap();
         header.set_api(shmem::RenderingAPI::Vk);
         header.set_width_and_height(1920, 1080);
-        if let (Some(shared_image), Some(command_pool)) =
-            (SHARED_VK_BUFFER.get(), COMMAND_POOL.get())
+        if let Some(shared_image) = SHARED_VK_BUFFER.get()
+            && let Some(command_pool) = COMMAND_POOL.get()
         {
-            let result = (commands.queue_wait_idle)(queue);
+            let command_buffer = COMMAND_BUFFER.get_or_init(|| {
+                let mut command_buffer = CommandBuffer::null();
 
-            let mut command_buffer = CommandBuffer::null();
+                let info = CommandBufferAllocateInfo::builder()
+                    .command_buffer_count(1)
+                    .command_pool(*command_pool)
+                    .level(CommandBufferLevel::PRIMARY);
 
-            let info = CommandBufferAllocateInfo::builder()
-                .command_buffer_count(1)
-                .command_pool(*command_pool)
-                .level(CommandBufferLevel::PRIMARY);
+                unsafe { (commands.allocate_command_buffers)(device, &*info, &mut command_buffer) };
 
-            (commands.allocate_command_buffers)(device, &*info, &mut command_buffer);
-            let info =
-                CommandBufferBeginInfo::builder().flags(CommandBufferUsageFlags::ONE_TIME_SUBMIT);
+                command_buffer
+            });
 
-            (commands.begin_command_buffer)(command_buffer, &*info);
+            unsafe {
+                (commands.reset_command_buffer)(*command_buffer, CommandBufferResetFlags::empty())
+            };
+            (unsafe {
+                (commands.reset_command_pool)(
+                    device,
+                    *command_pool,
+                    vk::CommandPoolResetFlags::empty(),
+                )
+            });
+
+            let info = CommandBufferBeginInfo::builder();
+            unsafe { (commands.begin_command_buffer)(*command_buffer, &*info) };
 
             let images = &**IMAGES.get_or_init(|| {
                 let mut len = 0;
 
-                let res =
-                    (commands.get_swapchain_images_khr)(device, *swapchain, &mut len, null_mut());
-
-                println!("get_len: {res}");
+                unsafe {
+                    (commands.get_swapchain_images_khr)(device, *swapchain, &mut len, null_mut())
+                };
 
                 let mut slice = vec![Image::default(); len as usize];
 
-                let res = (commands.get_swapchain_images_khr)(
-                    device,
-                    *swapchain,
-                    &mut len,
-                    slice.as_mut_ptr(),
-                );
-
-                println!("get_images: {res}");
+                unsafe {
+                    (commands.get_swapchain_images_khr)(
+                        device,
+                        *swapchain,
+                        &mut len,
+                        slice.as_mut_ptr(),
+                    )
+                };
 
                 slice.into_boxed_slice()
             });
@@ -346,18 +358,20 @@ unsafe extern "system" fn vk_new_queue_present(
                 })
                 .image(image);
 
-            (commands.cmd_pipeline_barrier)(
-                command_buffer,
-                PipelineStageFlags::BOTTOM_OF_PIPE,
-                PipelineStageFlags::TRANSFER,
-                DependencyFlags::empty(),
-                0,
-                null(),
-                0,
-                null(),
-                1,
-                &*memory_barrier,
-            );
+            unsafe {
+                (commands.cmd_pipeline_barrier)(
+                    *command_buffer,
+                    PipelineStageFlags::BOTTOM_OF_PIPE,
+                    PipelineStageFlags::TRANSFER,
+                    DependencyFlags::empty(),
+                    0,
+                    null(),
+                    0,
+                    null(),
+                    1,
+                    &*memory_barrier,
+                )
+            };
 
             let image_copy = ImageCopy::builder()
                 .dst_subresource(ImageSubresourceLayers {
@@ -375,18 +389,20 @@ unsafe extern "system" fn vk_new_queue_present(
                 .extent(vk::Extent3D {
                     width: 1920,
                     height: 1080,
-                    depth: 1
+                    depth: 1,
                 });
 
-            (commands.cmd_copy_image)(
-                command_buffer,
-                image,
-                ImageLayout::TRANSFER_SRC_OPTIMAL,
-                *shared_image,
-                ImageLayout::TRANSFER_DST_OPTIMAL,
-                1,
-                &*image_copy,
-            );
+            unsafe {
+                (commands.cmd_copy_image)(
+                    *command_buffer,
+                    image,
+                    ImageLayout::TRANSFER_SRC_OPTIMAL,
+                    *shared_image,
+                    ImageLayout::TRANSFER_DST_OPTIMAL,
+                    1,
+                    &*image_copy,
+                )
+            };
 
             let memory_barrier = vk::ImageMemoryBarrier::builder()
                 .old_layout(ImageLayout::TRANSFER_SRC_OPTIMAL)
@@ -404,34 +420,28 @@ unsafe extern "system" fn vk_new_queue_present(
                 })
                 .image(image);
 
-            (commands.cmd_pipeline_barrier)(
-                command_buffer,
-                PipelineStageFlags::TRANSFER,
-                PipelineStageFlags::BOTTOM_OF_PIPE,
-                DependencyFlags::DEVICE_GROUP,
-                0,
-                null(),
-                0,
-                null(),
-                1,
-                &*memory_barrier,
-            );
+            unsafe {
+                (commands.cmd_pipeline_barrier)(
+                    *command_buffer,
+                    PipelineStageFlags::TRANSFER,
+                    PipelineStageFlags::BOTTOM_OF_PIPE,
+                    DependencyFlags::DEVICE_GROUP,
+                    0,
+                    null(),
+                    0,
+                    null(),
+                    1,
+                    &*memory_barrier,
+                )
+            };
 
-            let result = (commands.end_command_buffer)(command_buffer);
-
-            let buffers = &[command_buffer];
-
+            let result = unsafe { (commands.end_command_buffer)(*command_buffer) };
+            let buffers = &[*command_buffer];
             let submit_info = vk::SubmitInfo::builder().command_buffers(buffers);
 
-            let result = (commands.queue_submit)(queue, 1, &*submit_info, vk::Fence::null());
-
             let result =
-                unsafe { (commands.queue_wait_idle)(queue) };
-
-            // TODO: Reuse fence
-            // TODO: Reuse command buffer
-            (commands.free_command_buffers)(device, *command_pool, 1, &command_buffer);
-            ((commands.reset_command_pool)(device, *command_pool, vk::CommandPoolResetFlags::RELEASE_RESOURCES));
+                unsafe { (commands.queue_submit)(queue, 1, &*submit_info, vk::Fence::null()) };
+            let result = unsafe { (commands.queue_wait_idle)(queue) };
         } else if let Some(nt_handle) = header.get_nt_shared_handle() {
             let mut info = ExternalMemoryImageCreateInfo::builder()
                 .handle_types(ExternalMemoryHandleTypeFlags::D3D11_TEXTURE);
@@ -453,7 +463,8 @@ unsafe extern "system" fn vk_new_queue_present(
                 });
             let mut shared_image = Image::null();
 
-            let result = (commands.create_image)(device, &*info, null(), &mut shared_image);
+            let result =
+                unsafe { (commands.create_image)(device, &*info, null(), &mut shared_image) };
 
             if result == VkResult::SUCCESS {
                 let mut ded_info = MemoryDedicatedAllocateInfoKHR::builder().image(shared_image);
@@ -475,16 +486,18 @@ unsafe extern "system" fn vk_new_queue_present(
 
                 println!("{result}");
 
-                let result = (commands.bind_image_memory)(device, shared_image, memory, 0);
+                let result =
+                    unsafe { (commands.bind_image_memory)(device, shared_image, memory, 0) };
 
                 println!("{result}");
 
                 let mut command_pool = CommandPool::null();
 
-                let info =
-                    CommandPoolCreateInfo::builder().flags(CommandPoolCreateFlags::TRANSIENT);
-                let result =
-                    (commands.create_command_pool)(device, &*info, null(), &mut command_pool);
+                let info = CommandPoolCreateInfo::builder()
+                    .flags(CommandPoolCreateFlags::RESET_COMMAND_BUFFER);
+                let result = unsafe {
+                    (commands.create_command_pool)(device, &*info, null(), &mut command_pool)
+                };
 
                 println!("{result}");
 
@@ -496,7 +509,7 @@ unsafe extern "system" fn vk_new_queue_present(
         }
     }
 
-    let result = VK_PRESENT.get().unwrap()(queue, info);
+    let result = unsafe { VK_PRESENT.get().unwrap()(queue, info) };
 
     result
 }

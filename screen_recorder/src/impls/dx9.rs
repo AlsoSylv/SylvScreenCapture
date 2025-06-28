@@ -2,22 +2,22 @@ use std::{ffi::c_void, mem::transmute, sync::OnceLock};
 
 use retour::RawDetour;
 use windows::{
-    core::{s, Interface, HRESULT},
     Win32::{
         Foundation::{HMODULE, HWND, RECT},
         Graphics::{
             Direct3D9::{
-                D3D9b_SDK_VERSION, IDirect3D9, IDirect3DDevice9, D3DBACKBUFFER_TYPE_MONO,
-                D3DCREATE_HARDWARE_VERTEXPROCESSING, D3DDEVTYPE_HAL, D3DFMT_A8R8G8B8,
-                D3DFMT_UNKNOWN, D3DMULTISAMPLE_NONE, D3DPOOL_DEFAULT, D3DPRESENTFLAG_DEVICECLIP,
-                D3DPRESENT_PARAMETERS, D3DSURFACE_DESC, D3DSWAPEFFECT_COPY, D3DUSAGE_RENDERTARGET,
-                D3DVIEWPORT9,
+                D3D9b_SDK_VERSION, D3DBACKBUFFER_TYPE_MONO, D3DCREATE_HARDWARE_VERTEXPROCESSING,
+                D3DDEVTYPE_HAL, D3DFMT_A8R8G8B8, D3DFMT_UNKNOWN, D3DMULTISAMPLE_NONE,
+                D3DPOOL_DEFAULT, D3DPRESENT_PARAMETERS, D3DPRESENTFLAG_DEVICECLIP, D3DSURFACE_DESC,
+                D3DSWAPEFFECT_COPY, D3DUSAGE_RENDERTARGET, D3DVIEWPORT9, IDirect3D9,
+                IDirect3DDevice9,
             },
             Gdi::RGNDATA,
         },
         System::LibraryLoader::GetProcAddress,
         UI::WindowsAndMessaging::WNDCLASSEXA,
     },
+    core::{HRESULT, Interface, s},
 };
 
 static DX9_PRESENT: OnceLock<<DX9Hooks as RenderingAPI>::PresentFn> = OnceLock::new();
@@ -179,7 +179,7 @@ unsafe extern "system" fn new_dx9_present_function(
 
     let out_surf = out_surf.unwrap();
 
-    let surf = out_surf.GetSurfaceLevel(0).unwrap();
+    let surf = unsafe { out_surf.GetSurfaceLevel(0).unwrap() };
 
     if let Err(e) = unsafe { this.GetRenderTargetData(&back_buffer, &surf) } {
         println!("{e:?}")

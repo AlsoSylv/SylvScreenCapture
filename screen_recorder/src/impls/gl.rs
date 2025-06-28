@@ -2,19 +2,19 @@ use std::{mem::transmute, sync::OnceLock};
 
 use retour::RawDetour;
 use windows::{
-    core::{s, BOOL, PCSTR},
     Win32::{
         Foundation::{HMODULE, HWND},
         Graphics::{
             Gdi::{GetDC, HDC},
             OpenGL::{
-                ChoosePixelFormat, SetPixelFormat, HGLRC, PFD_DOUBLEBUFFER, PFD_DRAW_TO_WINDOW,
-                PFD_MAIN_PLANE, PFD_SUPPORT_OPENGL, PFD_TYPE_RGBA, PIXELFORMATDESCRIPTOR,
+                ChoosePixelFormat, HGLRC, PFD_DOUBLEBUFFER, PFD_DRAW_TO_WINDOW, PFD_MAIN_PLANE,
+                PFD_SUPPORT_OPENGL, PFD_TYPE_RGBA, PIXELFORMATDESCRIPTOR, SetPixelFormat,
             },
         },
         System::LibraryLoader::GetProcAddress,
         UI::WindowsAndMessaging::WNDCLASSEXA,
     },
+    core::{BOOL, PCSTR, s},
 };
 
 use crate::RenderingAPI;

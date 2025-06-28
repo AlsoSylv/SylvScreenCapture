@@ -1,6 +1,6 @@
 use std::{
     ffi::CStr,
-    ops::{Deref, DerefMut},
+    ops::Deref,
     ptr::NonNull,
     sync::atomic::{AtomicI32, AtomicU8, AtomicU32, AtomicU64},
 };
@@ -60,15 +60,6 @@ where
 
     fn deref(&self) -> &Self::Target {
         self.inner.as_ref()
-    }
-}
-
-impl<T> DerefMut for Shmem<'_, T>
-where
-    T: Default,
-{
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        self.inner.as_mut()
     }
 }
 

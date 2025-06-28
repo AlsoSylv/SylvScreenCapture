@@ -1,4 +1,4 @@
-use std::ffi::{CStr, c_void};
+use std::{cell::UnsafeCell, ffi::CStr, marker::PhantomData};
 
 use windows::{
     Win32::{
@@ -13,12 +13,15 @@ use windows::{
 
 use super::common::View;
 
+type ViewPtr<'a, T> = &'a UnsafeCell<View<T>>;
+
 pub struct ShMem<'a, T>
 where
     T: Default,
 {
     file_mapping: HANDLE,
-    view: &'a mut View<T>,
+    view: Option<ViewPtr<'a, T>>,
+    lifetime: PhantomData<&'a T>,
 }
 
 impl<'a, T> ShMem<'a, T>
@@ -73,7 +76,7 @@ where
                     FILE_MAP_ALL_ACCESS,
                     0,
                     0,
-                    size_of::<View<T>>(),
+                    size_of::<UnsafeCell<View<T>>>(),
                 )
             };
 
@@ -82,47 +85,49 @@ where
                 return Err(Error::from_win32());
             }
 
-            let view = address.Value as *mut View<T>;
+            let view = address.Value as *mut UnsafeCell<View<T>>;
             if create {
                 // SAFETY: The type of the pointer has not been erased at any step
                 // But because the View COULD be in an invalid state, it must be set to the default
-                unsafe { view.write(View::new()) };
+                unsafe { view.write(UnsafeCell::new(View::new())) };
             }
 
-            // SAFETY: This is a non-null, valid object, which lasts for `'_`, and as such, is entirely within the safety of a rust reference
-            unsafe { &mut *view }
+            // SAFETY: This was initialized above
+            unsafe { &*view }
         };
 
-        view.inc_ref_count();
+        unsafe { &*view.get() }.inc_ref_count();
 
-        Ok(Self { file_mapping, view })
+        Ok(Self {
+            file_mapping,
+            view: Some(view),
+            lifetime: PhantomData,
+        })
     }
 
     pub fn as_ref(&self) -> &T {
-        self.view.as_ref()
-    }
-
-    pub fn as_mut(&mut self) -> &mut T {
-        self.view.as_mut()
+        self.view().as_ref()
     }
 
     pub fn view(&self) -> &View<T> {
-        &self.view
+        unsafe { &*self.view.unwrap().get() }
     }
 
-    /// #Safety
+    /// # Safety
     /// Calling this can trigger drop to be called
     /// This should only ever be called ONCE per program, either on shutdown or when the memory is no longer in use
     pub unsafe fn dec_ref_count(&mut self) {
-        let prev = self.view.dec_ref_count();
+        let prev = self.view().dec_ref_count();
 
         unsafe {
-            // SAFETY: This is part of the fact that this function can only be called when the object is being destoryed
+            // SAFETY: The view is owned by the currnet process, and is not shared
             UnmapViewOfFile(MEMORY_MAPPED_VIEW_ADDRESS {
-                Value: self.view as *mut _ as *mut c_void,
+                Value: self.view.unwrap().get() as _,
             })
             .unwrap();
         }
+
+        self.view = None;
 
         // The refcount is now 0
         if prev == 1 {

@@ -8,7 +8,6 @@ use std::sync::{LazyLock, RwLock};
 use windows::Win32::Foundation::HMODULE;
 use windows::Win32::System::SystemServices;
 use windows::{
-    core::{s, PCSTR},
     Win32::{
         Foundation::HINSTANCE,
         System::{
@@ -16,6 +15,7 @@ use windows::{
             LibraryLoader::{DisableThreadLibraryCalls, GetModuleHandleA},
         },
     },
+    core::{PCSTR, s},
 };
 
 use error::Error;
@@ -73,7 +73,7 @@ pub static SHARED_CPU_BUFFER: LazyLock<RwLock<shmem::Shmem<'static, shmem::Share
     });
 
 // Export this main as DllMain
-#[export_name = "DllMain"]
+#[unsafe(export_name = "DllMain")]
 pub extern "stdcall" fn dll_main(hinst_dll: HINSTANCE, fdw_reason: u32, _: *mut c_void) -> BOOL {
     let reason = if fdw_reason == SystemServices::DLL_PROCESS_DETACH {
         Reason::DllProcessDetach

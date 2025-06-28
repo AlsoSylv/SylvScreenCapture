@@ -3,25 +3,26 @@ use std::{mem::ManuallyDrop, sync::OnceLock};
 use retour::RawDetour;
 use shmem::SharedMemoryHeader;
 use windows::{
-    core::{s, Interface},
     Win32::{
         Foundation::{E_NOINTERFACE, HWND},
         Graphics::{
             Direct3D::{D3D_FEATURE_LEVEL, D3D_FEATURE_LEVEL_12_0},
             Direct3D12::{
-                ID3D12CommandAllocator, ID3D12CommandQueue, ID3D12Device, ID3D12Fence,
-                ID3D12GraphicsCommandList, ID3D12Resource, D3D12_COMMAND_LIST_TYPE_COPY,
-                D3D12_COMMAND_QUEUE_DESC, D3D12_FENCE_FLAG_NONE, D3D12_TEXTURE_COPY_LOCATION,
-                D3D12_TEXTURE_COPY_LOCATION_0, D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,
+                D3D12_COMMAND_LIST_TYPE_COPY, D3D12_COMMAND_QUEUE_DESC, D3D12_FENCE_FLAG_NONE,
+                D3D12_TEXTURE_COPY_LOCATION, D3D12_TEXTURE_COPY_LOCATION_0,
+                D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX, ID3D12CommandAllocator,
+                ID3D12CommandQueue, ID3D12Device, ID3D12Fence, ID3D12GraphicsCommandList,
+                ID3D12Resource,
             },
             Dxgi::{CreateDXGIFactory, IDXGIFactory, IDXGISwapChain},
         },
         System::{
             LibraryLoader::GetProcAddress,
-            Threading::{CreateEventA, WaitForSingleObject, INFINITE},
+            Threading::{CreateEventA, INFINITE, WaitForSingleObject},
         },
         UI::WindowsAndMessaging::WNDCLASSEXA,
     },
+    core::{Interface, s},
 };
 
 use crate::RenderingAPI;

@@ -1,20 +1,20 @@
-use crate::error::Error;
 use crate::RenderingAPI;
+use crate::error::Error;
 use retour::RawDetour;
 use shmem::SharedMemoryHeader;
 use std::mem::transmute;
 use std::sync::OnceLock;
-use windows::core::{s, Interface, HRESULT};
 use windows::Win32::Foundation::{E_NOINTERFACE, HMODULE, HWND};
 use windows::Win32::Graphics::Direct3D::{
     D3D_DRIVER_TYPE, D3D_DRIVER_TYPE_HARDWARE, D3D_FEATURE_LEVEL,
 };
 use windows::Win32::Graphics::Direct3D11::{
-    ID3D11Device, ID3D11Device1, ID3D11DeviceContext, ID3D11Texture2D, D3D11_SDK_VERSION,
+    D3D11_SDK_VERSION, ID3D11Device, ID3D11Device1, ID3D11DeviceContext, ID3D11Texture2D,
 };
-use windows::Win32::Graphics::Dxgi::{IDXGIAdapter, IDXGISwapChain, DXGI_SWAP_CHAIN_DESC};
+use windows::Win32::Graphics::Dxgi::{DXGI_SWAP_CHAIN_DESC, IDXGIAdapter, IDXGISwapChain};
 use windows::Win32::System::LibraryLoader::GetProcAddress;
 use windows::Win32::UI::WindowsAndMessaging::WNDCLASSEXA;
+use windows::core::{HRESULT, Interface, s};
 
 static DETOUR: OnceLock<RawDetour> = OnceLock::new();
 

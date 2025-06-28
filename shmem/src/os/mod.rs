@@ -26,10 +26,6 @@ mod common {
             &self.inner
         }
 
-        pub fn as_mut(&mut self) -> &mut T {
-            &mut self.inner
-        }
-
         pub fn inc_ref_count(&self) -> u8 {
             self.ref_count
                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst)

@@ -6,12 +6,10 @@ use std::{
 };
 
 use windows::{
-    core::{s, w},
     Win32::{
         Foundation::{DuplicateHandle, DUPLICATE_HANDLE_OPTIONS, HANDLE, HMODULE, MAX_PATH},
         System::{
             Diagnostics::Debug::WriteProcessMemory,
-            LibraryLoader::{GetModuleHandleW, GetProcAddress},
             Memory::{VirtualAllocEx, MEM_COMMIT, MEM_RESERVE, PAGE_READWRITE},
             ProcessStatus::{
                 EnumProcessModulesEx, GetModuleFileNameExW, ENUM_PROCESS_MODULES_EX_FLAGS,
@@ -162,9 +160,6 @@ impl Process {
         &self,
         library_path: &Path,
     ) -> Result<(), windows::core::Error> {
-        const KERNEL_32_DLL: windows::core::PCWSTR = w!("kernel32.dll");
-        const LOAD_LIBRARY_A_C: windows::core::PCSTR = s!("LoadLibraryW");
-
         // let module = unsafe { GetModuleHandleW(KERNEL_32_DLL) }?;
         let load_library_ptr = std::process::Command::new("./load_library_getter_64.exe")
             .stdout(Stdio::piped())

@@ -3,22 +3,22 @@ use std::{mem::transmute, sync::OnceLock};
 use retour::RawDetour;
 use shmem::SharedMemoryHeader;
 use windows::{
-    core::{s, Interface, HRESULT},
     Win32::{
         Foundation::{E_NOINTERFACE, HMODULE, HWND},
         Graphics::{
             Direct3D10::{
-                ID3D10Device, ID3D10Device1, ID3D10Texture2D, D3D10_DRIVER_TYPE,
-                D3D10_DRIVER_TYPE_HARDWARE, D3D10_SDK_VERSION,
+                D3D10_DRIVER_TYPE, D3D10_DRIVER_TYPE_HARDWARE, D3D10_SDK_VERSION, ID3D10Device,
+                ID3D10Device1, ID3D10Texture2D,
             },
-            Dxgi::{IDXGIAdapter, IDXGISwapChain, DXGI_SWAP_CHAIN_DESC},
+            Dxgi::{DXGI_SWAP_CHAIN_DESC, IDXGIAdapter, IDXGISwapChain},
         },
         System::LibraryLoader::GetProcAddress,
         UI::WindowsAndMessaging::WNDCLASSEXA,
     },
+    core::{HRESULT, Interface, s},
 };
 
-use crate::{error::Error, RenderingAPI};
+use crate::{RenderingAPI, error::Error};
 
 static DETOUR: OnceLock<RawDetour> = OnceLock::new();
 
