@@ -14,9 +14,9 @@ use windows::Win32::{
             ENUM_PROCESS_MODULES_EX_FLAGS, EnumProcessModulesEx, GetModuleFileNameExW,
         },
         Threading::{
-            CreateRemoteThread, OpenProcess, PROCESS_ACCESS_RIGHTS, PROCESS_CREATE_THREAD,
-            PROCESS_DUP_HANDLE, PROCESS_QUERY_INFORMATION, PROCESS_VM_OPERATION, PROCESS_VM_READ,
-            PROCESS_VM_WRITE,
+            CreateRemoteThread, IsWow64Process, OpenProcess, PROCESS_ACCESS_RIGHTS,
+            PROCESS_CREATE_THREAD, PROCESS_DUP_HANDLE, PROCESS_QUERY_INFORMATION,
+            PROCESS_VM_OPERATION, PROCESS_VM_READ, PROCESS_VM_WRITE,
         },
     },
 };
@@ -154,12 +154,26 @@ impl Process {
         Ok(shared_handle)
     }
 
+    pub fn is_64_bit(&self) -> bool {
+        let mut is_64_bit = windows::core::BOOL::default();
+
+        unsafe { IsWow64Process(self.handle, &raw mut is_64_bit).unwrap() };
+
+        is_64_bit.as_bool()
+    }
+
     pub unsafe fn load_remote_library(
         &self,
         library_path: &Path,
     ) -> Result<(), windows::core::Error> {
-        // let module = unsafe { GetModuleHandleW(KERNEL_32_DLL) }?;
-        let load_library_ptr = std::process::Command::new("./load_library_getter_64.exe")
+        // TODO: These dlls should be included, written to a temp file, and run from that instead
+        let program = if self.is_64_bit() {
+            "./load_library_getter_64.exe"
+        } else {
+            "./load_library_getter_32.exe"
+        };
+
+        let load_library_ptr = std::process::Command::new(program)
             .stdout(Stdio::piped())
             .output()
             .unwrap();
@@ -170,10 +184,6 @@ impl Process {
             .unwrap();
         println!("Getter: {}", load_library_ptr);
 
-        // let load_library_ptr = unsafe { GetProcAddress(module, LOAD_LIBRARY_A_C) }
-        //     .expect("kernel32.dll always contains LoadLibraryW");
-
-        // println!("Real: {}", load_library_ptr as usize);
         // Encode it as null terminated UTF-16
         let utf_16 = os_str_to_pcwstr(library_path.as_os_str());
         // This means that the size of the alloc is size_of::<u16> * length of slice

@@ -108,6 +108,7 @@ impl AppState<'_> {
                     if watch.clicked() {
                         println!("Fuck");
 
+                        // TODO: This code needs to be in the DLL?
                         // let dc = unsafe { GetDC(Some(window_id)) };
                         // let format = unsafe { GetPixelFormat(dc) };
                         // let mut desc = PIXELFORMATDESCRIPTOR::default();
@@ -130,10 +131,11 @@ impl AppState<'_> {
             });
 
         for program in self.target_states.iter_mut() {
-            let header = &program.shared_memory;
+            let header = &mut program.shared_memory;
 
             if header.ref_count() == 1 {
-                // todo!("Remove this shared memory, the program has closed")
+                // This seems to require reworking to a regular for loop, not a huge deal, but an iterator based solution would be nice.
+                todo!("Remove this shared memory, the program has closed")
             }
 
             let rendering_api = header.api();
@@ -324,28 +326,7 @@ impl ApplicationHandler for WinitState<'_> {
             TextureOptions::default(),
         );
 
-        // println!("H");
-        // if env::args().nth(1).is_none() {
-        //     println!("Please pass the process name as first argument");
-        //     return;
-        // }
-        // let process_name = env::args().nth(1).unwrap();
-        //
-        // let name = OsString::from(process_name);
-        //
-        // let process = system.processes_by_name(&name).next().unwrap();
-
         let target_states = Vec::new();
-
-        // let (shared_mem, textures) = inject(process, &device).expect("AAA");
-
-        // target_states.push(TargetState {
-        //     name,
-        //     pid: process.pid().as_u32(),
-        //     shared_memory: shared_mem,
-        //     textures,
-        // });
-        // textures.push((process.pid().as_u32(), dx10_down_texture, dx11_up_texture));
 
         let state = Self {
             window: Some(window),
@@ -382,8 +363,6 @@ impl ApplicationHandler for WinitState<'_> {
         let egui = self.egui_state.as_mut().unwrap();
         let window = self.window.as_mut().unwrap();
         let app_state = self.app_state.as_mut().unwrap();
-        // let shared_handle = self.shared_handle.as_mut().unwrap();
-        // let listener = self.listener.as_mut().unwrap();
         let d3d11_state = self.d3d11_state.as_mut().unwrap();
 
         let response = egui.winit.on_window_event(window, &event);
@@ -450,18 +429,16 @@ impl ApplicationHandler for WinitState<'_> {
             }
             _ => {}
         }
-
-        // if let Some(Ok(_listener)) = listener.next() {
-        //     todo!("lol wtf")
-        // }
     }
 }
 
+/// This injects using load library injection, while there are alternatives, they are not the current goal of the project
 fn inject<'a>(
     process: &Process,
     device: &ID3D11Device,
 ) -> Result<(Shmem<'a, SharedMemoryHeader>, [Option<ID3D11Texture2D>; 2]), ()> {
     const SHARED_RIGHTS: u32 = DXGI_SHARED_RESOURCE_READ.0 | DXGI_SHARED_RESOURCE_WRITE.0;
+    // TODO: Make sure that these are the only dlls that can be targetted
     const NT_HANDLE_APIS: &[&str] = &["d3d11.dll", "d3d12.dll", "opengl32.dll", "vulkan-1.dll"];
     const HANDLE_APIS: &[&str] = &["d3d9.dll", "d3d10.dll"];
 
@@ -472,7 +449,7 @@ fn inject<'a>(
     let target_process = process_ext::Process::new(process);
     let mut textures = [None, None];
     let mut nt_handle = false;
-    let mut handle = true;
+    let mut handle = false;
 
     target_process
         .iter_modules(|ostr| {
@@ -498,6 +475,7 @@ fn inject<'a>(
 
     let current_process = process_ext::Process::current_process();
 
+    // TODO: Is there another way to represent this? A struct maybe?
     if handle {
         if let Some(texture) = create_texture(device, 1920, 1080, false) {
             let resource = texture.cast::<IDXGIResource>().unwrap();
@@ -529,11 +507,16 @@ fn inject<'a>(
         }
     }
 
+    // TODO: This path should be more defined, probably included at the top of the app, and written to a set location?
     let mut dll_path = env::current_exe().unwrap();
     dll_path.pop();
     dll_path.pop();
     dll_path.pop();
-    dll_path.push("screen_recorder_64.dll");
+    if target_process.is_64_bit() {
+        dll_path.push("screen_recorder_64.dll");
+    } else {
+        dll_path.push("screen_recorder_32.dll");
+    }
 
     println!("{dll_path:?}");
 
