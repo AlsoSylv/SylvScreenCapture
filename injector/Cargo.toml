@@ -6,7 +6,7 @@ edition = "2024"
 [dependencies]
 sysinfo = { version = "0.35" }
 winit = { version = "0.30.9", features = ["rwh_06"] }
-egui-directx11 = "0.7.0"
+egui-directx11 = "0.8.0"
 egui = "0.31.0"
 egui-winit = "0.31.0"
 windows.workspace = true
