@@ -5,19 +5,19 @@ use std::ffi::{CStr, OsString};
 // use std::io::{Read, Write};
 use std::sync::Arc;
 use sysinfo::{Pid, Process, ProcessRefreshKind, RefreshKind, System};
-use windows::core::Interface;
 use windows::Win32::Graphics::Direct3D11::{
-    ID3D11Device, ID3D11DeviceContext, ID3D11RenderTargetView, ID3D11Texture2D,
     D3D11_BIND_RENDER_TARGET, D3D11_BIND_SHADER_RESOURCE, D3D11_BOX, D3D11_CPU_ACCESS_READ,
-    D3D11_MAPPED_SUBRESOURCE, D3D11_MAP_READ, D3D11_RESOURCE_MISC_SHARED,
+    D3D11_MAP_READ, D3D11_MAPPED_SUBRESOURCE, D3D11_RESOURCE_MISC_SHARED,
     D3D11_RESOURCE_MISC_SHARED_NTHANDLE, D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT,
-    D3D11_USAGE_STAGING,
+    D3D11_USAGE_STAGING, ID3D11Device, ID3D11DeviceContext, ID3D11RenderTargetView,
+    ID3D11Texture2D,
 };
 use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_SAMPLE_DESC};
 use windows::Win32::Graphics::Dxgi::{
-    IDXGIResource, IDXGIResource1, IDXGISwapChain, DXGI_PRESENT, DXGI_SHARED_RESOURCE_READ,
-    DXGI_SHARED_RESOURCE_WRITE,
+    DXGI_PRESENT, DXGI_SHARED_RESOURCE_READ, DXGI_SHARED_RESOURCE_WRITE, IDXGIResource,
+    IDXGIResource1, IDXGISwapChain,
 };
+use windows::core::Interface;
 use winit::application::ApplicationHandler;
 use winit::dpi::PhysicalSize;
 use winit::event::WindowEvent;
@@ -94,19 +94,28 @@ impl AppState<'_> {
                 // TODO: Enum windows here
                 system_ext::System::new()
                     .unwrap()
-                    .enum_windows(|name, process_id| {
+                    .enum_windows(|name, process_id, window_id| {
                         // println!("{name:?}");
 
-                        windows.push((name, process_id));
+                        windows.push((name, process_id, window_id));
                         true
                     })
                     .unwrap();
 
-                for (name, id) in windows {
+                for (name, id, window_id) in windows {
                     let watch = ui.button(name.to_string_lossy());
 
                     if watch.clicked() {
                         println!("Fuck");
+
+                        // let dc = unsafe { GetDC(Some(window_id)) };
+                        // let format = unsafe { GetPixelFormat(dc) };
+                        // let mut desc = PIXELFORMATDESCRIPTOR::default();
+                        // let err = unsafe { DescribePixelFormat(dc, format, size_of::<PIXELFORMATDESCRIPTOR>() as u32, Some(&raw mut desc)) };
+                        // if err == 0 {
+                        //     println!("{:?}", unsafe { GetLastError() });
+                        // }
+                        // println!("{desc:?}");
 
                         let process = self.system.process(Pid::from_u32(id)).unwrap();
                         let (shared_mem, textures) = inject(process, &d3d11_state.device).unwrap();
@@ -121,8 +130,6 @@ impl AppState<'_> {
             });
 
         for program in self.target_states.iter_mut() {
-            println!("{:?}", program.name);
-
             let header = &program.shared_memory;
 
             if header.ref_count() == 1 {
@@ -181,7 +188,7 @@ impl AppState<'_> {
             };
 
             if !slice.is_empty() && slice[0..4] != [0; 4] {
-                println!("{:?}", &slice[0..4])
+                // println!("{:?}", &slice[0..4])
             }
 
             for i in 0..(slice.len() / 4) {

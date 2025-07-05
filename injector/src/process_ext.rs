@@ -5,20 +5,18 @@ use std::{
     ptr::null_mut,
 };
 
-use windows::{
-    Win32::{
-        Foundation::{DuplicateHandle, DUPLICATE_HANDLE_OPTIONS, HANDLE, HMODULE, MAX_PATH},
-        System::{
-            Diagnostics::Debug::WriteProcessMemory,
-            Memory::{VirtualAllocEx, MEM_COMMIT, MEM_RESERVE, PAGE_READWRITE},
-            ProcessStatus::{
-                EnumProcessModulesEx, GetModuleFileNameExW, ENUM_PROCESS_MODULES_EX_FLAGS,
-            },
-            Threading::{
-                CreateRemoteThread, OpenProcess, PROCESS_ACCESS_RIGHTS, PROCESS_CREATE_THREAD,
-                PROCESS_DUP_HANDLE, PROCESS_QUERY_INFORMATION, PROCESS_VM_OPERATION,
-                PROCESS_VM_READ, PROCESS_VM_WRITE,
-            },
+use windows::Win32::{
+    Foundation::{DUPLICATE_HANDLE_OPTIONS, DuplicateHandle, HANDLE, HMODULE, MAX_PATH},
+    System::{
+        Diagnostics::Debug::WriteProcessMemory,
+        Memory::{MEM_COMMIT, MEM_RESERVE, PAGE_READWRITE, VirtualAllocEx},
+        ProcessStatus::{
+            ENUM_PROCESS_MODULES_EX_FLAGS, EnumProcessModulesEx, GetModuleFileNameExW,
+        },
+        Threading::{
+            CreateRemoteThread, OpenProcess, PROCESS_ACCESS_RIGHTS, PROCESS_CREATE_THREAD,
+            PROCESS_DUP_HANDLE, PROCESS_QUERY_INFORMATION, PROCESS_VM_OPERATION, PROCESS_VM_READ,
+            PROCESS_VM_WRITE,
         },
     },
 };

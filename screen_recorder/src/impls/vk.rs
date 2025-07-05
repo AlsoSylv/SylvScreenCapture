@@ -436,74 +436,90 @@ unsafe extern "system" fn vk_new_queue_present(
             };
 
             let result = unsafe { (commands.end_command_buffer)(*command_buffer) };
-            let buffers = &[*command_buffer];
-            let submit_info = vk::SubmitInfo::builder().command_buffers(buffers);
+            if result == VkResult::SUCCESS {
+                let buffers = &[*command_buffer];
+                let submit_info = vk::SubmitInfo::builder().command_buffers(buffers);
+                let result =
+                    unsafe { (commands.queue_submit)(queue, 1, &*submit_info, vk::Fence::null()) };
+                if result == VkResult::SUCCESS {
+                    let result = unsafe { (commands.queue_wait_idle)(queue) };
 
-            let result =
-                unsafe { (commands.queue_submit)(queue, 1, &*submit_info, vk::Fence::null()) };
-            let result = unsafe { (commands.queue_wait_idle)(queue) };
+                    if result != VkResult::SUCCESS {
+                        unreachable!("The queue could not be waited for, so something is wrong")
+                    }
+                }
+            }
         } else if let Some(nt_handle) = header.get_nt_shared_handle() {
+            // External memory info: Just the NT handle type needs to be specified
             let mut info = ExternalMemoryImageCreateInfo::builder()
                 .handle_types(ExternalMemoryHandleTypeFlags::D3D11_TEXTURE);
 
+            // 2D, RGBA, 1 layer, no mips d3d11 texture used to be copied to
             let info = ImageCreateInfo::builder()
                 .image_type(ImageType::_2D)
                 .array_layers(1)
-                .mip_levels(0)
+                .mip_levels(1)
                 .samples(SampleCountFlags::_1)
                 .format(Format::R8G8B8A8_UNORM)
                 .initial_layout(ImageLayout::TRANSFER_DST_OPTIMAL)
-                .sharing_mode(SharingMode::EXCLUSIVE)
-                .push_next(&mut info)
+                .sharing_mode(SharingMode::CONCURRENT)
                 .usage(ImageUsageFlags::TRANSFER_DST | ImageUsageFlags::COLOR_ATTACHMENT)
                 .extent(Extent3D {
                     width: 1920,
                     height: 1080,
                     depth: 1,
-                });
+                })
+                .push_next(&mut info);
+
             let mut shared_image = Image::null();
 
+            // Create the image
             let result =
                 unsafe { (commands.create_image)(device, &*info, null(), &mut shared_image) };
 
             if result == VkResult::SUCCESS {
                 let mut ded_info = MemoryDedicatedAllocateInfoKHR::builder().image(shared_image);
 
+                // Again specifie the handle type, with the NT handle passed to it this time
                 let mut info = ImportMemoryWin32HandleInfoKHR::builder()
                     .handle_type(ExternalMemoryHandleTypeFlags::D3D11_TEXTURE)
                     .handle(nt_handle.0);
 
+                // Size == game size * 4
                 let info = MemoryAllocateInfo::builder()
                     .allocation_size(1920 * 1080 * 4)
                     .memory_type_index(MEM_TY_IDX.load(Ordering::SeqCst))
-                    .push_next(&mut info)
-                    .push_next(&mut ded_info);
+                    .push_next(&mut ded_info)
+                    .push_next(&mut info);
 
                 let mut memory = DeviceMemory::null();
 
                 let result =
                     unsafe { (commands.allocate_memory)(device, &*info, null(), &mut memory) };
 
-                println!("{result}");
-
-                let result =
-                    unsafe { (commands.bind_image_memory)(device, shared_image, memory, 0) };
-
-                println!("{result}");
-
-                let mut command_pool = CommandPool::null();
-
-                let info = CommandPoolCreateInfo::builder()
-                    .flags(CommandPoolCreateFlags::RESET_COMMAND_BUFFER);
-                let result = unsafe {
-                    (commands.create_command_pool)(device, &*info, null(), &mut command_pool)
-                };
-
-                println!("{result}");
-
                 if result == VkResult::SUCCESS {
-                    COMMAND_POOL.get_or_init(|| command_pool);
-                    SHARED_VK_BUFFER.get_or_init(|| shared_image);
+                    let result =
+                        unsafe { (commands.bind_image_memory)(device, shared_image, memory, 0) };
+
+                    if result == VkResult::SUCCESS {
+                        let mut command_pool = CommandPool::null();
+
+                        let info = CommandPoolCreateInfo::builder()
+                            .flags(CommandPoolCreateFlags::RESET_COMMAND_BUFFER);
+                        let result = unsafe {
+                            (commands.create_command_pool)(
+                                device,
+                                &*info,
+                                null(),
+                                &mut command_pool,
+                            )
+                        };
+
+                        if result == VkResult::SUCCESS {
+                            COMMAND_POOL.get_or_init(|| command_pool);
+                            SHARED_VK_BUFFER.get_or_init(|| shared_image);
+                        }
+                    }
                 }
             }
         }

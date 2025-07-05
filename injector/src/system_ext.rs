@@ -1,14 +1,14 @@
 use std::{ffi::OsString, os::windows::ffi::OsStringExt};
 
 use windows::{
-    core::{Error, BOOL},
     Win32::{
-        Foundation::{SetLastError, HWND, LPARAM, WIN32_ERROR},
+        Foundation::{HWND, LPARAM, SetLastError, WIN32_ERROR},
         UI::WindowsAndMessaging::{
             EnumWindows, GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId,
             IsWindowVisible,
         },
     },
+    core::{BOOL, Error},
 };
 
 macro_rules! try_win32 {
@@ -29,7 +29,7 @@ macro_rules! try_win32 {
 
 pub struct System {}
 
-type Callback<'a> = &'a mut dyn FnMut(OsString, u32) -> bool;
+type Callback<'a> = &'a mut dyn FnMut(OsString, u32, HWND) -> bool;
 type CallbackPtr<'a> = *mut Callback<'a>;
 
 impl System {
@@ -39,7 +39,7 @@ impl System {
 
     pub fn enum_windows(
         &self,
-        mut window_callback: impl FnMut(OsString, u32) -> bool,
+        mut window_callback: impl FnMut(OsString, u32, HWND) -> bool,
     ) -> Result<(), Error> {
         unsafe extern "system" fn enum_windows_callback(id: HWND, value: LPARAM) -> BOOL {
             const MAX_PATH: usize = windows::Win32::Foundation::MAX_PATH as usize;
@@ -69,7 +69,7 @@ impl System {
 
             let name = OsString::from_wide(&title_buffer[..title_len]);
 
-            unsafe { (*callback)(name, process_id).into() }
+            unsafe { (*callback)(name, process_id, id).into() }
         }
 
         let mut window_callback: Callback = &mut window_callback;
