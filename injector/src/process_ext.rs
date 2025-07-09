@@ -159,7 +159,7 @@ impl Process {
 
         unsafe { IsWow64Process(self.handle, &raw mut is_64_bit).unwrap() };
 
-        is_64_bit.as_bool()
+        !is_64_bit.as_bool()
     }
 
     pub unsafe fn load_remote_library(
