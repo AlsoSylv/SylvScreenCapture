@@ -8,10 +8,10 @@ x64 = "x86_64";
 
 match (len(sys.argv)):
     case 2: 
-        bool(sys.argv[1])
+        release = bool(sys.argv[1])
     case 3: 
-        bool(sys.argv[1])
-        bool(sys.argv[2])
+        release = bool(sys.argv[1])
+        gnu = bool(sys.argv[2])
 
 profile = "release" if release else "dev"
 profile_dir = "release" if release else "debug"
