@@ -36,3 +36,10 @@ panic = "abort"
 
 [profile.release]
 panic = "abort"
+
+[profile.release-lto]
+panic = "abort"
+debug-assertions = false
+lto = "fat"
+codegen-units = 1
+strip = true

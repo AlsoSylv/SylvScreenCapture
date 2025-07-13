@@ -177,9 +177,9 @@ impl Process {
             .stdout(Stdio::piped())
             .output()
             .unwrap();
-        println!("Getter: {load_library_ptr:?}");
-        let load_library_ptr: usize = String::from_utf8(load_library_ptr.stdout)
-            .unwrap()
+        let load_library_ptr = String::from_utf8(load_library_ptr.stdout).unwrap();
+        println!("{load_library_ptr:?}");
+        let load_library_ptr: usize = load_library_ptr
             .parse()
             .unwrap();
         println!("Getter: {}", load_library_ptr);
