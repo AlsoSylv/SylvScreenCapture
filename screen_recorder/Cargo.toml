@@ -14,3 +14,4 @@ glad-gl.workspace = true
 shmem.workspace = true
 vulkanalia = { version = "0.28.0", features = ["libloading", "window"] }
 retour = { version = "0.3.1" }
+shared_defs = { version = "0.1.0", path = "../shared_defs" }

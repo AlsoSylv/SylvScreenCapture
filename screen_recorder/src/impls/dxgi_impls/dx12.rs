@@ -1,7 +1,7 @@
 use std::{mem::ManuallyDrop, sync::OnceLock};
 
 use retour::RawDetour;
-use shmem::SharedMemoryHeader;
+use shared_defs::SharedMemoryHeader;
 use windows::{
     Win32::{
         Foundation::{E_NOINTERFACE, HWND},
@@ -178,7 +178,7 @@ pub(super) fn dx12_duplicate_hook(
     }
 
     let device: ID3D12Device = unsafe { this.GetDevice() }?;
-    header.set_api(shmem::RenderingAPI::Dx12);
+    header.set_api(shared_defs::RenderingAPI::Dx12);
     header.set_width_and_height(1920, 1080);
 
     if let Some(buffer) = SHARED_BUFFER.get() {

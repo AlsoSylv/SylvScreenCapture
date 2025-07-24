@@ -1,7 +1,7 @@
 use std::{mem::transmute, sync::OnceLock};
 
 use retour::RawDetour;
-use shmem::SharedMemoryHeader;
+use shared_defs::SharedMemoryHeader;
 use windows::{
     Win32::{
         Foundation::{E_NOINTERFACE, HMODULE, HWND},
@@ -125,7 +125,7 @@ pub(super) fn dx10_new_present_fn(
     }
 
     let device: ID3D10Device = unsafe { this.GetDevice() }?;
-    header.set_api(shmem::RenderingAPI::Dx10);
+    header.set_api(shared_defs::RenderingAPI::Dx10);
 
     if let Some(shared_buffer) = SHARED_BUFFER.get() {
         // SAFETY: The back buffer is not dropped from this

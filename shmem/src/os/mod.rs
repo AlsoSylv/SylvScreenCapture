@@ -1,10 +1,14 @@
 #[cfg(target_os = "windows")]
 mod windows;
 
-pub use windows::ShMem;
+#[cfg(target_os = "windows")]
+pub use windows::{Mutex, ShMem};
 
 mod common {
-    use std::sync::atomic::AtomicU8;
+    use std::{
+        ops::{Deref, DerefMut},
+        sync::atomic::AtomicU8,
+    };
 
     pub struct View<T> {
         ref_count: AtomicU8,
@@ -22,10 +26,6 @@ mod common {
             }
         }
 
-        pub fn as_ref(&self) -> &T {
-            &self.inner
-        }
-
         pub fn inc_ref_count(&self) -> u8 {
             self.ref_count
                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
@@ -41,4 +41,24 @@ mod common {
                 .fetch_sub(1, std::sync::atomic::Ordering::SeqCst)
         }
     }
+
+    impl<T> Deref for View<T> {
+        type Target = T;
+
+        fn deref(&self) -> &Self::Target {
+            &self.inner
+        }
+    }
+
+    impl<T> DerefMut for View<T> {
+        fn deref_mut(&mut self) -> &mut Self::Target {
+            &mut self.inner
+        }
+    }
+
+    // pub enum WaitEvent {
+    //     Success,
+    //     Failed,
+    //     Timeout,
+    // }
 }

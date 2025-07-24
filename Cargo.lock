@@ -761,6 +761,7 @@ dependencies = [
  "egui",
  "egui-directx11",
  "egui-winit",
+ "shared_defs",
  "shmem",
  "sysinfo",
  "windows",
@@ -1623,6 +1624,7 @@ version = "0.1.0"
 dependencies = [
  "glad-gl",
  "retour",
+ "shared_defs",
  "shmem",
  "vulkanalia",
  "windows",
@@ -1659,6 +1661,14 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
+]
+
+[[package]]
+name = "shared_defs"
+version = "0.1.0"
+dependencies = [
+ "shmem",
+ "windows",
 ]
 
 [[package]]

@@ -1,7 +1,7 @@
 use crate::RenderingAPI;
 use crate::error::Error;
 use retour::RawDetour;
-use shmem::SharedMemoryHeader;
+use shared_defs::SharedMemoryHeader;
 use std::mem::transmute;
 use std::sync::OnceLock;
 use windows::Win32::Foundation::{E_NOINTERFACE, HMODULE, HWND};
@@ -132,7 +132,7 @@ pub(super) fn dx11_duplicate_hook(
         .cast()
         .expect("Casting `ID3D11Device` to `ID3D11Device1` should never fail");
 
-    header.set_api(shmem::RenderingAPI::Dx11);
+    header.set_api(shared_defs::RenderingAPI::Dx11);
 
     if let Some(shared_buffer) = SHARED_BUFFER.get() {
         let context = unsafe { device.GetImmediateContext() }.expect("This is not null");
@@ -159,7 +159,7 @@ pub(super) fn dx11_duplicate_hook(
             if let Ok(shared_buffer) = maybe_shared_buffer {
                 SHARED_BUFFER.get_or_init(|| shared_buffer);
             } else {
-                println!("Error opening shared texture: {:?}", maybe_shared_buffer)
+                println!("Error opening shared texture: {maybe_shared_buffer:?}")
             }
         }
     }

@@ -141,7 +141,7 @@ unsafe extern "system" fn new_dx9_present_function(
     let this = unsafe { IDirect3DDevice9::from_raw_borrowed(&this).unwrap() };
 
     let header = SHARED_CPU_BUFFER.read().unwrap();
-    header.set_api(shmem::RenderingAPI::Dx9);
+    header.set_api(shared_defs::RenderingAPI::Dx9);
     header.set_width_and_height(1920, 1080);
 
     let Some(mut handle) = header.get_shared_handle() else {

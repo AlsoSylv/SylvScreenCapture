@@ -287,7 +287,7 @@ unsafe extern "system" fn vk_new_queue_present(
 
     if !device.is_null() {
         let header = SHARED_CPU_BUFFER.read().unwrap();
-        header.set_api(shmem::RenderingAPI::Vk);
+        header.set_api(shared_defs::RenderingAPI::Vk);
         header.set_width_and_height(1920, 1080);
         if let Some(shared_image) = SHARED_VK_BUFFER.get()
             && let Some(command_pool) = COMMAND_POOL.get()
@@ -525,7 +525,5 @@ unsafe extern "system" fn vk_new_queue_present(
         }
     }
 
-    let result = unsafe { VK_PRESENT.get().unwrap()(queue, info) };
-
-    result
+    unsafe { VK_PRESENT.get().unwrap()(queue, info) }
 }

@@ -1,5 +1,5 @@
 [workspace]
-members = ["injector", "screen_recorder", "glad-gl", "shmem", "load_library_getter"]
+members = ["injector", "screen_recorder", "glad-gl", "shmem", "load_library_getter", "shared_defs"]
 resolver = "2"
 
 [workspace.dependencies]
@@ -10,25 +10,27 @@ shmem = { path = "./shmem"}
 version = "0.61"
 default-features = false
 features = [
-    "Win32_Graphics_Direct3D",
-    "Win32_System_LibraryLoader",
-    "Win32_System_SystemServices",
-    "Win32_System_Threading",
     "Win32_Security",
     "Win32_UI_WindowsAndMessaging",
     "Win32_Graphics_Gdi",
-    "Win32_System_Memory",
-    "Win32_System_Diagnostics_Debug",
     "Win32_System_Console",
+    "Win32_System_Diagnostics_Debug",
+    "Win32_System_LibraryLoader",
+    "Win32_System_SystemServices",
+    "Win32_System_Threading",
+    "Win32_System_Memory",
     "Win32_System_ProcessStatus",
     "Win32_Graphics_OpenGL",
+    "Win32_Graphics_Direct3D",
     "Win32_Graphics_Direct3D9",
     "Win32_Graphics_Direct3D10",
     "Win32_Graphics_Direct3D11",
-    "Graphics_DirectX_Direct3D11",
+    "Win32_Graphics_Direct3D12",
     "Win32_Graphics_Dxgi",
     "Win32_Graphics_Dxgi_Common",
-    "Win32_Graphics_Direct3D12",
+    "Win32_Storage",
+    "Win32_Storage_FileSystem",
+    "Win32_System_WindowsProgramming"
 ]
 
 [profile.dev]
@@ -38,7 +40,7 @@ panic = "abort"
 panic = "abort"
 
 [profile.release-lto]
-panic = "abort"
+inherits = "release"
 debug-assertions = false
 lto = "fat"
 codegen-units = 1

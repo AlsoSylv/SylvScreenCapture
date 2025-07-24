@@ -184,7 +184,7 @@ unsafe extern "system" fn new_wgl_swap_buffers(un_named_1: HDC) -> BOOL {
     }
 
     let header = crate::SHARED_CPU_BUFFER.read().unwrap();
-    header.set_api(shmem::RenderingAPI::Ogl);
+    header.set_api(shared_defs::RenderingAPI::Ogl);
     let handle = header.get_nt_shared_handle();
 
     if let Some(handle) = handle {

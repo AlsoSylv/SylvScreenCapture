@@ -1,5 +1,6 @@
 use egui::{Color32, ColorImage, Frame, Image, TextureHandle, TextureOptions};
-use shmem::{SharedMemoryHeader, Shmem};
+use shared_defs::SharedMemoryHeader;
+use shmem::Shmem;
 use std::env;
 use std::ffi::{CStr, OsString};
 // use std::io::{Read, Write};
@@ -28,9 +29,6 @@ mod process_ext;
 mod system_ext;
 
 fn main() {
-    // println!("{}", (windows_sys::Win32::System::LibraryLoader::LoadLibraryW as *const ()).expose_provenance());
-    // return;
-
     let event_loop = winit::event_loop::EventLoop::new().unwrap();
 
     let mut app = WinitState::default();
@@ -63,24 +61,24 @@ fn d3d11_texture_description(width: u32, height: u32, nt_handle: bool) -> D3D11_
 }
 
 #[derive(Default)]
-struct WinitState<'a> {
+struct WinitState {
     window: Option<Window>,
     egui_state: Option<EguiState>,
-    app_state: Option<AppState<'a>>,
+    app_state: Option<AppState>,
     // shared_handle: Option<HANDLE>,
     // listener: Option<Listener>,
     d3d11_state: Option<D3D11State>,
 }
 
-struct AppState<'a> {
-    target_states: Vec<TargetState<'a>>,
+struct AppState {
+    target_states: Vec<TargetState>,
     display_texture: TextureHandle,
     system: System,
     /// This is used to copy ALL the program textures on top of each other BEFORE recording it
     copy_buffer: ID3D11Texture2D,
 }
 
-impl AppState<'_> {
+impl AppState {
     pub fn update(&mut self, d3d11_state: &D3D11State, ctx: &egui::Context) {
         self.system.refresh_all();
 
@@ -130,13 +128,12 @@ impl AppState<'_> {
                 }
             });
 
+        self.target_states.retain(|program| {
+            !program.shared_memory.loaded() | (program.shared_memory.ref_count() > 1)
+        });
         for program in self.target_states.iter_mut() {
+            println!("{:?}", program.name);
             let header = &mut program.shared_memory;
-
-            if header.ref_count() == 1 {
-                // This seems to require reworking to a regular for loop, not a huge deal, but an iterator based solution would be nice.
-                todo!("Remove this shared memory, the program has closed")
-            }
 
             let rendering_api = header.api();
 
@@ -215,10 +212,10 @@ impl AppState<'_> {
     }
 }
 
-struct TargetState<'a> {
+struct TargetState {
     name: OsString,
     pid: u32,
-    shared_memory: shmem::Shmem<'a, shmem::SharedMemoryHeader>,
+    shared_memory: shmem::Shmem<shared_defs::SharedMemoryHeader>,
     textures: [Option<ID3D11Texture2D>; 2],
 }
 
@@ -235,7 +232,7 @@ struct D3D11State {
     device: ID3D11Device,
 }
 
-impl ApplicationHandler for WinitState<'_> {
+impl ApplicationHandler for WinitState {
     fn resumed(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
         let system = System::new_with_specifics(
             RefreshKind::nothing().with_processes(ProcessRefreshKind::nothing()),
@@ -436,14 +433,14 @@ impl ApplicationHandler for WinitState<'_> {
 fn inject<'a>(
     process: &Process,
     device: &ID3D11Device,
-) -> Result<(Shmem<'a, SharedMemoryHeader>, [Option<ID3D11Texture2D>; 2]), ()> {
+) -> Result<(Shmem<SharedMemoryHeader>, [Option<ID3D11Texture2D>; 2]), ()> {
     const SHARED_RIGHTS: u32 = DXGI_SHARED_RESOURCE_READ.0 | DXGI_SHARED_RESOURCE_WRITE.0;
     // TODO: Make sure that these are the only dlls that can be targetted
     const NT_HANDLE_APIS: &[&str] = &["d3d11.dll", "d3d12.dll", "opengl32.dll", "vulkan-1.dll"];
     const HANDLE_APIS: &[&str] = &["d3d9.dll", "d3d10.dll"];
 
     let name = format!("SylvScreenShare{}\0", process.pid().as_u32());
-    let shared_memory: Shmem<'_, SharedMemoryHeader> =
+    let shared_memory: Shmem<SharedMemoryHeader> =
         shmem::Shmem::new(CStr::from_bytes_with_nul(name.as_bytes()).unwrap());
 
     let target_process = process_ext::Process::new(process);

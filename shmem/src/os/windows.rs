@@ -1,11 +1,20 @@
-use std::{cell::UnsafeCell, ffi::CStr, marker::PhantomData};
+use std::{
+    ffi::CStr,
+    ops::{Deref, DerefMut},
+    ptr::NonNull,
+};
 
 use windows::{
     Win32::{
-        Foundation::{CloseHandle, HANDLE},
-        System::Memory::{
-            CreateFileMappingA, FILE_MAP_ALL_ACCESS, MEMORY_MAPPED_VIEW_ADDRESS, MapViewOfFile,
-            OpenFileMappingA, PAGE_READWRITE, UnmapViewOfFile,
+        Foundation::{CloseHandle, GetLastError, HANDLE, WAIT_EVENT},
+        Storage::FileSystem::SYNCHRONIZE,
+        System::{
+            Memory::{
+                CreateFileMappingA, FILE_MAP_ALL_ACCESS, MEMORY_MAPPED_VIEW_ADDRESS, MapViewOfFile,
+                OpenFileMappingA, PAGE_READWRITE, UnmapViewOfFile,
+            },
+            Threading::{CreateMutexA, INFINITE, ReleaseMutex, WaitForSingleObject},
+            WindowsProgramming::OpenMutexA,
         },
     },
     core::{Error, PCSTR},
@@ -13,18 +22,17 @@ use windows::{
 
 use super::common::View;
 
-type ViewPtr<'a, T> = &'a UnsafeCell<View<T>>;
+type ViewPtr<T> = NonNull<View<T>>;
 
-pub struct ShMem<'a, T>
+pub struct ShMem<T>
 where
     T: Default,
 {
     file_mapping: HANDLE,
-    view: Option<ViewPtr<'a, T>>,
-    lifetime: PhantomData<&'a T>,
+    view: Option<ViewPtr<T>>,
 }
 
-impl<'a, T> ShMem<'a, T>
+impl<T> ShMem<T>
 where
     T: Default,
 {
@@ -36,7 +44,7 @@ where
         Self::create_or_open(name, false)
     }
 
-    fn create_or_open(name: &CStr, create: bool) -> Result<ShMem<'a, T>, Error> {
+    fn create_or_open(name: &CStr, create: bool) -> Result<Self, Error> {
         let file_mapping = if create {
             let size = size_of::<View<T>>();
             #[cfg(target_pointer_width = "64")]
@@ -68,49 +76,41 @@ where
             }
         };
 
-        let view = {
-            // SAFETY: The size of the view is the same as the map, and it is a view into the `View<T>` struct
-            let address = unsafe {
-                MapViewOfFile(
-                    file_mapping,
-                    FILE_MAP_ALL_ACCESS,
-                    0,
-                    0,
-                    size_of::<UnsafeCell<View<T>>>(),
-                )
-            };
-
-            // This means that the view failed
-            if address.Value.is_null() {
-                return Err(Error::from_win32());
-            }
-
-            let view = address.Value as *mut UnsafeCell<View<T>>;
-            if create {
-                // SAFETY: The type of the pointer has not been erased at any step
-                // But because the View COULD be in an invalid state, it must be set to the default
-                unsafe { view.write(UnsafeCell::new(View::new())) };
-            }
-
-            // SAFETY: This was initialized above
-            unsafe { &*view }
+        // SAFETY: The size of the view is the same as the map, and it is a view into the `View<T>` struct
+        let address = unsafe {
+            MapViewOfFile(
+                file_mapping,
+                FILE_MAP_ALL_ACCESS,
+                0,
+                0,
+                size_of::<View<T>>(),
+            )
         };
 
-        unsafe { &*view.get() }.inc_ref_count();
+        let Some(view): Option<ViewPtr<T>> = NonNull::new(address.Value as _) else {
+            return Err(Error::from_win32());
+        };
+
+        if create {
+            // SAFETY: The type of the pointer has not been erased at any step
+            // But because the View COULD be in an invalid state, it must be set to the default
+            unsafe { view.write(View::new()) };
+        }
+
+        unsafe { view.as_ref().inc_ref_count() };
 
         Ok(Self {
             file_mapping,
             view: Some(view),
-            lifetime: PhantomData,
         })
     }
 
-    pub fn as_ref(&self) -> &T {
-        self.view().as_ref()
+    pub fn view(&self) -> &View<T> {
+        unsafe { &*self.view.unwrap().as_ref() }
     }
 
-    pub fn view(&self) -> &View<T> {
-        unsafe { &*self.view.unwrap().get() }
+    pub fn view_mut(&mut self) -> &mut View<T> {
+        unsafe { &mut *self.view.unwrap().as_mut() }
     }
 
     /// # Safety
@@ -122,7 +122,7 @@ where
         unsafe {
             // SAFETY: The view is owned by the currnet process, and is not shared
             UnmapViewOfFile(MEMORY_MAPPED_VIEW_ADDRESS {
-                Value: self.view.unwrap().get() as _,
+                Value: self.view.unwrap().as_ptr() as _,
             })
             .unwrap();
         }
@@ -137,11 +137,61 @@ where
     }
 }
 
-impl<T> Drop for ShMem<'_, T>
+impl<T> Deref for ShMem<T>
+where
+    T: Default,
+{
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        self.view()
+    }
+}
+
+impl<T> DerefMut for ShMem<T>
+where
+    T: Default,
+{
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.view_mut()
+    }
+}
+
+impl<T> Drop for ShMem<T>
 where
     T: Default,
 {
     fn drop(&mut self) {
         unsafe { self.dec_ref_count() };
+    }
+}
+
+pub struct Mutex {
+    mutex: HANDLE,
+}
+
+impl Mutex {
+    pub fn new(name: &CStr) -> Result<Self, windows::core::Error> {
+        let mutex = unsafe { CreateMutexA(None, false, PCSTR(name.as_ptr() as _)) }?;
+
+        Ok(Self { mutex })
+    }
+
+    pub fn open(name: &CStr) -> Result<Self, windows::core::Error> {
+        let mutex = unsafe { OpenMutexA(SYNCHRONIZE.0, false, PCSTR(name.as_ptr() as _)) };
+
+        if mutex.is_invalid() {
+            return unsafe { Err(GetLastError())? };
+        }
+
+        Ok(Self { mutex })
+    }
+
+    pub fn lock(&self) -> WAIT_EVENT {
+        unsafe { WaitForSingleObject(self.mutex, INFINITE) }
+    }
+
+    pub fn release(&self) -> Result<(), windows::core::Error> {
+        unsafe { ReleaseMutex(self.mutex) }
     }
 }

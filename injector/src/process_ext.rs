@@ -1,5 +1,6 @@
 use std::{
     ffi::{OsStr, OsString},
+    io::Write,
     path::Path,
     process::Stdio,
     ptr::null_mut,
@@ -14,12 +15,16 @@ use windows::Win32::{
             ENUM_PROCESS_MODULES_EX_FLAGS, EnumProcessModulesEx, GetModuleFileNameExW,
         },
         Threading::{
-            CreateRemoteThread, IsWow64Process, OpenProcess, PROCESS_ACCESS_RIGHTS,
-            PROCESS_CREATE_THREAD, PROCESS_DUP_HANDLE, PROCESS_QUERY_INFORMATION,
-            PROCESS_VM_OPERATION, PROCESS_VM_READ, PROCESS_VM_WRITE,
+            CreateRemoteThread, IsWow64Process, LPTHREAD_START_ROUTINE, OpenProcess,
+            PROCESS_ACCESS_RIGHTS, PROCESS_CREATE_THREAD, PROCESS_DUP_HANDLE,
+            PROCESS_QUERY_INFORMATION, PROCESS_VM_OPERATION, PROCESS_VM_READ, PROCESS_VM_WRITE,
         },
     },
 };
+
+const LOAD_LIBRARY_GETTER_64: &[u8] = include_bytes!("../.././load_library_getter_64.exe");
+
+const LOAD_LIBRARY_GETTER_32: &[u8] = include_bytes!("../.././load_library_getter_32.exe");
 
 const ATTACH_RIGHTS: PROCESS_ACCESS_RIGHTS = PROCESS_ACCESS_RIGHTS(
     PROCESS_CREATE_THREAD.0
@@ -166,23 +171,24 @@ impl Process {
         &self,
         library_path: &Path,
     ) -> Result<(), windows::core::Error> {
-        // TODO: These dlls should be included, written to a temp file, and run from that instead
-        let program = if self.is_64_bit() {
-            "./load_library_getter_64.exe"
+        let mut exe = std::env::temp_dir();
+        exe.push("load_library_getter.exe");
+        let mut file = std::fs::File::create(&exe)?;
+
+        if self.is_64_bit() {
+            file.write_all(LOAD_LIBRARY_GETTER_64)?;
         } else {
-            "./load_library_getter_32.exe"
+            file.write_all(LOAD_LIBRARY_GETTER_32)?;
         };
 
-        let load_library_ptr = std::process::Command::new(program)
+        drop(file);
+
+        let load_library_ptr = std::process::Command::new(exe)
             .stdout(Stdio::piped())
             .output()
             .unwrap();
         let load_library_ptr = String::from_utf8(load_library_ptr.stdout).unwrap();
-        println!("{load_library_ptr:?}");
-        let load_library_ptr: usize = load_library_ptr
-            .parse()
-            .unwrap();
-        println!("Getter: {}", load_library_ptr);
+        let load_library_ptr: usize = load_library_ptr.parse().unwrap();
 
         // Encode it as null terminated UTF-16
         let utf_16 = os_str_to_pcwstr(library_path.as_os_str());
@@ -213,7 +219,7 @@ impl Process {
             )?;
         }
 
-        let load_library_ptr: unsafe extern "system" fn(*mut std::ffi::c_void) -> u32 =
+        let load_library_ptr: LPTHREAD_START_ROUTINE =
             unsafe { std::mem::transmute(load_library_ptr) };
 
         unsafe {
@@ -221,7 +227,7 @@ impl Process {
                 self.handle,
                 None,
                 0,
-                Some(load_library_ptr),
+                load_library_ptr,
                 Some(virtual_alloc),
                 0,
                 None,

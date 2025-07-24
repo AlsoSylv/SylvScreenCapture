@@ -59,15 +59,17 @@ enum Reason {
 /// This requires that the shared memory be created BEFORE the DLL is injected, but this is fine
 /// This is wrapped in a RwLock, not for safety (every operation is atomic), but so that it can be dropped
 /// When the game exits
-pub static SHARED_CPU_BUFFER: LazyLock<RwLock<shmem::Shmem<'static, shmem::SharedMemoryHeader>>> =
+pub static SHARED_CPU_BUFFER: LazyLock<RwLock<shmem::Shmem<shared_defs::SharedMemoryHeader>>> =
     LazyLock::new(|| {
         use std::io::Write;
 
         const START: &str = "SylvScreenShare";
+        // This is length + u32::MAX.to_string().len() + null
         let mut name = [0; START.len() + 11];
         write!(name.as_mut_slice(), "{START}{}", std::process::id()).unwrap();
         let name = std::ffi::CStr::from_bytes_until_nul(&name).unwrap();
-        let shared_buffer = shmem::Shmem::<shmem::SharedMemoryHeader>::open(name);
+        let shared_buffer = shmem::Shmem::<shared_defs::SharedMemoryHeader>::open(name);
+        shared_buffer.set_loaded(true);
         shared_buffer.set_pid();
         RwLock::new(shared_buffer)
     });
@@ -109,7 +111,7 @@ fn main(hinst_dll: HINSTANCE, reason: Reason) -> Result<(), Error> {
         std::thread::spawn(dll_attach);
     } else {
         let mut lock = SHARED_CPU_BUFFER.write().unwrap();
-        lock.set_api(shmem::RenderingAPI::None);
+        lock.set_api(shared_defs::RenderingAPI::None);
         unsafe { lock.dec_ref_count() };
     };
 
@@ -121,6 +123,9 @@ fn dll_attach() {
 
     // const SOCKET_NAME: &str = r"\\.\pipe\sylvias_shared_handle.sock";
 
+    /* TODO: DX10, 11, and 12 share the same characteristics and all use DXGI, and can be checked for at run time.
+       Individual hooks should be replaced with a single DXGIHook that does this.
+    */
     const OGL_DLL: PCSTR = s!("opengl32.dll");
     const D3D9_DLL: PCSTR = s!("d3d9.dll");
     const D3D10_DLL: PCSTR = s!("d3d10.dll");
@@ -160,12 +165,12 @@ fn dll_attach() {
     //     println!("{e}");
     // }
 
-    // let call = unsafe { GetModuleHandleA(D3D11_DLL) }
-    //     .map_err(Error::from)
-    //     .and_then(dll_attach_rendering_api::<impls::DX11Hooks>);
-    // if let Err(e) = call {
-    //     println!("{e}");
-    // }
+    let call = unsafe { GetModuleHandleA(D3D11_DLL) }
+        .map_err(Error::from)
+        .and_then(dll_attach_rendering_api::<impls::DX11Hooks>);
+    if let Err(e) = call {
+        println!("{e}");
+    }
 
     // let call = unsafe { GetModuleHandleA(D3D12_DLL) }
     //     .map_err(Error::from)

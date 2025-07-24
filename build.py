@@ -35,6 +35,7 @@ for (assembly, exe) in assemblys:
         dst = f'{path}\\{assembly}_{x86}.{trail}'
         try:
             os.remove(dst)
-        except:
-            {}
+        except OSError as e:
+            print(f'\033[0;31mError\033[0m: {e}')
+
         os.rename(f'{path}\\target\\{target}\\{profile_dir}\\{assembly}.{trail}', dst)
