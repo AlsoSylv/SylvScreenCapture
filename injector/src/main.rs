@@ -7,7 +7,7 @@ use std::ffi::{CStr, OsString};
 use std::sync::Arc;
 use sysinfo::{Pid, Process, ProcessRefreshKind, RefreshKind, System};
 use windows::Win32::Graphics::Direct3D11::{
-    D3D11_BIND_RENDER_TARGET, D3D11_BIND_SHADER_RESOURCE, D3D11_BOX, D3D11_CPU_ACCESS_READ,
+    D3D11_BIND_RENDER_TARGET, D3D11_BIND_SHADER_RESOURCE, D3D11_CPU_ACCESS_READ,
     D3D11_MAP_READ, D3D11_MAPPED_SUBRESOURCE, D3D11_RESOURCE_MISC_SHARED,
     D3D11_RESOURCE_MISC_SHARED_NTHANDLE, D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT,
     D3D11_USAGE_STAGING, ID3D11Device, ID3D11DeviceContext, ID3D11RenderTargetView,
@@ -100,6 +100,7 @@ impl AppState {
                     })
                     .unwrap();
 
+                // TODO: Add HWND to shared memory
                 for (name, id, window_id) in windows {
                     let watch = ui.button(name.to_string_lossy());
 
@@ -146,18 +147,7 @@ impl AppState {
 
             if let Some(texture) = in_use_texture {
                 unsafe {
-                    let (width, height) = header.get_width_and_height();
-
-                    let src_box = D3D11_BOX {
-                        left: 0,
-                        top: 0,
-                        right: width,
-                        bottom: height,
-                        front: 0,
-                        back: 0,
-                    };
-
-                    d3d11_state.ctx.CopyResource(&*self.copy_buffer, texture);
+                    d3d11_state.ctx.CopySubresourceRegion(&*self.copy_buffer, 0, 0, 0, 0, texture, 0, None);
                 }
             }
         }
@@ -214,6 +204,7 @@ impl AppState {
 
 struct TargetState {
     name: OsString,
+    // TODO: Figure out why this is here?
     pid: u32,
     shared_memory: shmem::Shmem<shared_defs::SharedMemoryHeader>,
     textures: [Option<ID3D11Texture2D>; 2],

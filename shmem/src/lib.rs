@@ -1,4 +1,4 @@
-use std::{
+use core::{
     cell::UnsafeCell,
     ffi::CStr,
     ops::{Deref, DerefMut},
@@ -37,14 +37,14 @@ where
         self.inner
             .view()
             .ref_count()
-            .load(std::sync::atomic::Ordering::SeqCst)
+            .load(core::sync::atomic::Ordering::SeqCst)
     }
 
     /// # Safety
     /// Calling this can trigger the deconstructor, and should only be called if this is the intended effect
-    pub unsafe fn dec_ref_count(&mut self) {
+    pub unsafe fn dec_program_count(&mut self) {
         unsafe {
-            self.inner.dec_ref_count();
+            self.inner.dec_program_count();
         }
     }
 }

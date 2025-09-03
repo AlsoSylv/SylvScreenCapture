@@ -97,7 +97,7 @@ pub extern "stdcall" fn dll_main(hinst_dll: HINSTANCE, fdw_reason: u32, _: *mut 
 
 fn main(hinst_dll: HINSTANCE, reason: Reason) -> Result<(), Error> {
     if reason == Reason::DllProcessAttach {
-        // #[cfg(debug_assertions)]
+        #[cfg(debug_assertions)]
         unsafe {
             if let Err(e) = AllocConsole() {
                 eprintln!("{e:?}")
@@ -112,7 +112,7 @@ fn main(hinst_dll: HINSTANCE, reason: Reason) -> Result<(), Error> {
     } else {
         let mut lock = SHARED_CPU_BUFFER.write().unwrap();
         lock.set_api(shared_defs::RenderingAPI::None);
-        unsafe { lock.dec_ref_count() };
+        unsafe { lock.dec_program_count() };
     };
 
     Ok(())
@@ -120,8 +120,6 @@ fn main(hinst_dll: HINSTANCE, reason: Reason) -> Result<(), Error> {
 
 fn dll_attach() {
     type ModuleDispatchArray<'a> = &'a [(PCSTR, fn(HMODULE) -> Result<(), Error>)];
-
-    // const SOCKET_NAME: &str = r"\\.\pipe\sylvias_shared_handle.sock";
 
     /* TODO: DX10, 11, and 12 share the same characteristics and all use DXGI, and can be checked for at run time.
        Individual hooks should be replaced with a single DXGIHook that does this.
@@ -134,7 +132,6 @@ fn dll_attach() {
     const VK_DLL: PCSTR = s!("vulkan-1.dll");
 
     // This is a list of APIs and their hooks, since all APIs need to be attempted to be hooked
-    #[allow(unused)]
     const MODULES: ModuleDispatchArray<'static> = &[
         (OGL_DLL, dll_attach_rendering_api::<impls::OpenGLHooks>),
         (D3D9_DLL, dll_attach_rendering_api::<impls::DX9Hooks>),
@@ -144,46 +141,13 @@ fn dll_attach() {
         (VK_DLL, dll_attach_rendering_api::<impls::VkHooks>),
     ];
 
-    // let call = unsafe { GetModuleHandleA(OGL_DLL) }
-    //     .map_err(Error::from)
-    //     .and_then(dll_attach_rendering_api::<impls::OpenGLHooks>);
-    // if let Err(e) = call {
-    //     println!("{e}");
-    // }
-
-    // let call = unsafe { GetModuleHandleA(D3D9_DLL) }
-    //     .map_err(Error::from)
-    //     .and_then(dll_attach_rendering_api::<impls::DX9Hooks>);
-    // if let Err(e) = call {
-    //     println!("{e}");
-    // }
-
-    // let call = unsafe { GetModuleHandleA(D3D10_DLL) }
-    //     .map_err(Error::from)
-    //     .and_then(dll_attach_rendering_api::<impls::DX10Hooks>);
-    // if let Err(e) = call {
-    //     println!("{e}");
-    // }
-
-    let call = unsafe { GetModuleHandleA(D3D11_DLL) }
-        .map_err(Error::from)
-        .and_then(dll_attach_rendering_api::<impls::DX11Hooks>);
-    if let Err(e) = call {
-        println!("{e}");
-    }
-
-    // let call = unsafe { GetModuleHandleA(D3D12_DLL) }
-    //     .map_err(Error::from)
-    //     .and_then(dll_attach_rendering_api::<impls::DX12Hooks>);
-    // if let Err(e) = call {
-    //     println!("{e}");
-    // }
-
-    let call = unsafe { GetModuleHandleA(VK_DLL) }
-        .map_err(Error::from)
-        .and_then(dll_attach_rendering_api::<impls::VkHooks>);
-    if let Err(e) = call {
-        println!("{e}");
+    for (dll, hook) in MODULES {
+        let call = unsafe { GetModuleHandleA(*dll) }
+            .map_err(Error::from)
+            .and_then(*hook);
+        if let Err(e) = call {
+            println!("{e}");
+        }
     }
 }
 

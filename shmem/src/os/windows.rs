@@ -1,4 +1,4 @@
-use std::{
+use core::{
     ffi::CStr,
     ops::{Deref, DerefMut},
     ptr::NonNull,
@@ -24,6 +24,7 @@ use super::common::View;
 
 type ViewPtr<T> = NonNull<View<T>>;
 
+#[repr(C)]
 pub struct ShMem<T>
 where
     T: Default,
@@ -116,24 +117,21 @@ where
     /// # Safety
     /// Calling this can trigger drop to be called
     /// This should only ever be called ONCE per program, either on shutdown or when the memory is no longer in use
-    pub unsafe fn dec_ref_count(&mut self) {
-        let prev = self.view().dec_ref_count();
+    pub unsafe fn dec_program_count(&mut self) {
+        let _ = self.view().dec_ref_count();
 
         unsafe {
             // SAFETY: The view is owned by the currnet process, and is not shared
             UnmapViewOfFile(MEMORY_MAPPED_VIEW_ADDRESS {
-                Value: self.view.unwrap().as_ptr() as _,
+                Value: self.view_mut() as *mut _ as _,
             })
             .unwrap();
         }
 
         self.view = None;
 
-        // The refcount is now 0
-        if prev == 1 {
-            // SAFETY: If this is the last program referencing the memory, then it should be closed
-            unsafe { CloseHandle(self.file_mapping).unwrap() };
-        }
+        unsafe { CloseHandle(self.file_mapping).unwrap() };
+        self.file_mapping = HANDLE::default();
     }
 }
 
@@ -162,7 +160,7 @@ where
     T: Default,
 {
     fn drop(&mut self) {
-        unsafe { self.dec_ref_count() };
+        unsafe { self.dec_program_count() };
     }
 }
 

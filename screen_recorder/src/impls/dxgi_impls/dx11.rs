@@ -150,7 +150,8 @@ pub(super) fn dx11_duplicate_hook(
         //     });
         // }
 
-        unsafe { context.CopyResource(shared_buffer, &back_buffer) };
+        // TODO: The box needs to be restricted to the smallest surface, default is src size
+        unsafe { context.CopySubresourceRegion(shared_buffer, 0, 0, 0, 0, &back_buffer, 0, None) };
     } else {
         let handle = header.get_nt_shared_handle();
 

@@ -131,7 +131,7 @@ pub(super) fn dx10_new_present_fn(
         // SAFETY: The back buffer is not dropped from this
         let back_buffer: ID3D10Texture2D = unsafe { this.GetBuffer(0) }.expect("Backbuffer exists");
         // SAFETY: This copies from the back buffer to the shared buffer
-        unsafe { device.CopyResource(shared_buffer, &back_buffer) };
+        unsafe { device.CopySubresourceRegion(shared_buffer, 0, 0, 0, 0, &back_buffer, 0, None) };
     } else {
         let handle = header.get_shared_handle();
         if let Some(handle) = handle {

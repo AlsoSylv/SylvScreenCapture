@@ -183,12 +183,14 @@ impl Process {
 
         drop(file);
 
-        let load_library_ptr = std::process::Command::new(exe)
+        let load_library_ptr = std::process::Command::new(&exe)
             .stdout(Stdio::piped())
             .output()
             .unwrap();
         let load_library_ptr = String::from_utf8(load_library_ptr.stdout).unwrap();
         let load_library_ptr: usize = load_library_ptr.parse().unwrap();
+
+        std::fs::remove_file(exe)?;
 
         // Encode it as null terminated UTF-16
         let utf_16 = os_str_to_pcwstr(library_path.as_os_str());

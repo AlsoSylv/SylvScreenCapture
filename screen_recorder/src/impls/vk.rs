@@ -4,7 +4,7 @@ use retour::RawDetour;
 use std::ffi::c_char;
 use std::ptr::{null, null_mut};
 use std::sync::OnceLock;
-use std::sync::atomic::{AtomicPtr, AtomicU32, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 use vulkanalia::vk::{
     self, CommandBuffer, CommandBufferAllocateInfo, CommandBufferBeginInfo, CommandBufferLevel,
     CommandBufferResetFlags, CommandPool, CommandPoolCreateFlags, CommandPoolCreateInfo,
@@ -15,9 +15,8 @@ use vulkanalia::vk::{
     InstanceCommands, InstanceCreateInfo, MemoryAllocateInfo, MemoryDedicatedAllocateInfoKHR,
     PFN_vkAcquireNextImageKHR, PFN_vkCreateDevice, PFN_vkCreateInstance, PFN_vkCreateSwapchainKHR,
     PFN_vkEnumeratePhysicalDevices, PFN_vkGetDeviceProcAddr, PFN_vkGetInstanceProcAddr,
-    PFN_vkGetSwapchainImagesKHR, PFN_vkQueuePresentKHR, PhysicalDevice, PipelineStageFlags,
-    PresentInfoKHR, Queue, Result as VkResult, SampleCountFlags, Semaphore, SharingMode,
-    SwapchainKHR,
+    PFN_vkQueuePresentKHR, PhysicalDevice, PipelineStageFlags, PresentInfoKHR, Queue,
+    Result as VkResult, SampleCountFlags, Semaphore, SharingMode, SwapchainKHR,
 };
 use windows::Win32::Foundation::HMODULE;
 use windows::Win32::System::LibraryLoader::GetProcAddress;
@@ -182,16 +181,16 @@ impl RenderingAPI for VkHooks {
             NEXT_IMAGE_DETOUR.get_or_init(|| detour).enable()?;
         }
 
-        let get_swapchain_images =
-            unsafe { vk_get_device_proc_addr(device, c"vkGetSwapchainImagesKHR".as_ptr()) }
-                .unwrap();
+        // let get_swapchain_images =
+        //     unsafe { vk_get_device_proc_addr(device, c"vkGetSwapchainImagesKHR".as_ptr()) }
+        //         .unwrap();
 
-        let detour =
-            unsafe { RawDetour::new(get_swapchain_images as _, vk_new_get_swapchain_images as _)? };
+        // let detour =
+        //     unsafe { RawDetour::new(get_swapchain_images as _, vk_new_get_swapchain_images as _)? };
 
-        unsafe {
-            GET_SWAPCHAIN_IMAGES.get_or_init(|| detour).enable()?;
-        }
+        // unsafe {
+        //     GET_SWAPCHAIN_IMAGES.get_or_init(|| detour).enable()?;
+        // }
 
         let instance_commands =
             unsafe { InstanceCommands::load(|name| vk_get_instance_proc_addr(instance, name)) };
@@ -229,23 +228,6 @@ impl RenderingAPI for VkHooks {
 
 static MEM_TY_IDX: AtomicU32 = AtomicU32::new(0);
 static DEVICE: AtomicUsize = AtomicUsize::new(0);
-static IMAGES: AtomicPtr<Image> = AtomicPtr::new(null_mut());
-
-static GET_SWAPCHAIN_IMAGES: OnceLock<RawDetour> = OnceLock::new();
-
-unsafe extern "system" fn vk_new_get_swapchain_images(
-    device: vk::Device,
-    swapchain: SwapchainKHR,
-    swapchain_image_count: *mut u32,
-    swapchain_images: *mut Image,
-) -> VkResult {
-    IMAGES.store(swapchain_images, Ordering::SeqCst);
-
-    let get_images: PFN_vkGetSwapchainImagesKHR =
-        unsafe { std::mem::transmute(GET_SWAPCHAIN_IMAGES.get().unwrap().trampoline()) };
-
-    unsafe { get_images(device, swapchain, swapchain_image_count, swapchain_images) }
-}
 
 unsafe extern "system" fn vk_new_acquire_next_image(
     device: vulkanalia::vk::Device,

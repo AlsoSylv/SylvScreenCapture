@@ -8,6 +8,9 @@
       <sourceFolder url="file://$MODULE_DIR$/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/glad-vulkan/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/shmem/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/load_library_getter/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/screen_recorder/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/shared_defs/src" isTestSource="false" />
       <excludeFolder url="file://$MODULE_DIR$/target" />
     </content>
     <orderEntry type="inheritedJdk" />
