@@ -89,7 +89,7 @@ where
         };
 
         let Some(view): Option<ViewPtr<T>> = NonNull::new(address.Value as _) else {
-            return Err(Error::from_win32());
+            return Err(Error::from_thread());
         };
 
         if create {

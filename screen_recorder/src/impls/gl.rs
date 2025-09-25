@@ -93,7 +93,7 @@ impl RenderingAPI for OpenGLHooks {
         let context = unsafe { wglCreateContext(dc) };
 
         if context.is_invalid() {
-            return Err(windows::core::Error::from_win32().into());
+            return Err(windows::core::Error::from_thread().into());
         }
 
         unsafe { wglMakeCurrent(dc, context).ok()? };

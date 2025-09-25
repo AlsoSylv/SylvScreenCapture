@@ -16,7 +16,7 @@ macro_rules! try_win32 {
         unsafe { SetLastError(WIN32_ERROR(0)) };
         let err = $win32_call;
         if err == 0 {
-            let err = windows::core::Error::from_win32();
+            let err = windows::core::Error::from_thread();
             if err.code().0 != 0 {
                 unsafe { SetLastError(WIN32_ERROR(err.code().0 as u32)) };
                 return false.into();

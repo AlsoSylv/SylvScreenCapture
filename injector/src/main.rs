@@ -1,4 +1,4 @@
-use egui::{Color32, ColorImage, Frame, Image, TextureHandle, TextureOptions};
+use egui::{Color32, ColorImage, Frame, Image, TextureHandle, TextureId, TextureOptions};
 use shared_defs::SharedMemoryHeader;
 use shmem::Shmem;
 use std::env;
@@ -7,13 +7,14 @@ use std::ffi::{CStr, OsString};
 use std::sync::Arc;
 use sysinfo::{Pid, Process, ProcessRefreshKind, RefreshKind, System};
 use windows::Win32::Graphics::Direct3D11::{
-    D3D11_BIND_RENDER_TARGET, D3D11_BIND_SHADER_RESOURCE, D3D11_CPU_ACCESS_READ,
-    D3D11_MAP_READ, D3D11_MAPPED_SUBRESOURCE, D3D11_RESOURCE_MISC_SHARED,
-    D3D11_RESOURCE_MISC_SHARED_NTHANDLE, D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT,
-    D3D11_USAGE_STAGING, ID3D11Device, ID3D11DeviceContext, ID3D11RenderTargetView,
-    ID3D11Texture2D,
+    D3D11_BIND_RENDER_TARGET, D3D11_BIND_SHADER_RESOURCE, D3D11_CPU_ACCESS_READ, D3D11_MAP_READ,
+    D3D11_MAPPED_SUBRESOURCE, D3D11_RESOURCE_MISC_SHARED, D3D11_RESOURCE_MISC_SHARED_NTHANDLE,
+    D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT, D3D11_USAGE_STAGING, ID3D11Device,
+    ID3D11DeviceContext, ID3D11RenderTargetView, ID3D11Texture2D,
 };
-use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_SAMPLE_DESC};
+use windows::Win32::Graphics::Dxgi::Common::{
+    DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_FORMAT_R8G8B8A8_UNORM_SRGB, DXGI_SAMPLE_DESC,
+};
 use windows::Win32::Graphics::Dxgi::{
     DXGI_PRESENT, DXGI_SHARED_RESOURCE_READ, DXGI_SHARED_RESOURCE_WRITE, IDXGIResource,
     IDXGIResource1, IDXGISwapChain,
@@ -46,7 +47,7 @@ fn d3d11_texture_description(width: u32, height: u32, nt_handle: bool) -> D3D11_
     D3D11_TEXTURE2D_DESC {
         Width: width,
         Height: height,
-        Format: DXGI_FORMAT_R8G8B8A8_UNORM,
+        Format: DXGI_FORMAT_R8G8B8A8_UNORM_SRGB,
         SampleDesc: DXGI_SAMPLE_DESC {
             Count: 1,
             Quality: 0,
@@ -72,10 +73,10 @@ struct WinitState {
 
 struct AppState {
     target_states: Vec<TargetState>,
-    display_texture: TextureHandle,
     system: System,
     /// This is used to copy ALL the program textures on top of each other BEFORE recording it
     copy_buffer: ID3D11Texture2D,
+    copy_buffer_tid: TextureId,
 }
 
 impl AppState {
@@ -147,56 +148,23 @@ impl AppState {
 
             if let Some(texture) = in_use_texture {
                 unsafe {
-                    d3d11_state.ctx.CopySubresourceRegion(&*self.copy_buffer, 0, 0, 0, 0, texture, 0, None);
+                    d3d11_state.ctx.CopySubresourceRegion(
+                        &*self.copy_buffer,
+                        0,
+                        0,
+                        0,
+                        0,
+                        texture,
+                        0,
+                        None,
+                    );
                 }
             }
         }
 
-        let image = if !self.target_states.is_empty() {
-            let mut mapped_surface = D3D11_MAPPED_SUBRESOURCE::default();
-            if let Err(e) = unsafe {
-                d3d11_state.ctx.Map(
-                    &*self.copy_buffer,
-                    0,
-                    D3D11_MAP_READ,
-                    0,
-                    Some(&mut mapped_surface),
-                )
-            } {
-                println!("Error reading mapped surface: {e}");
-                return;
-            };
-
-            let (width, height) = (1920, 1080);
-
-            let slice = unsafe {
-                std::slice::from_raw_parts_mut(
-                    mapped_surface.pData as *mut u8,
-                    width as usize * height as usize * 4,
-                )
-            };
-
-            if !slice.is_empty() && slice[0..4] != [0; 4] {
-                // println!("{:?}", &slice[0..4])
-            }
-
-            for i in 0..(slice.len() / 4) {
-                slice[3 + i * 4] = 255;
-            }
-
-            let image =
-                ColorImage::from_rgba_unmultiplied([width as usize, height as usize], slice);
-
-            unsafe { d3d11_state.ctx.Unmap(&*self.copy_buffer, 0) };
-
-            image
-        } else {
-            ColorImage::from_rgba_unmultiplied([1, 1], &[0, 0, 0, 255])
-        };
-        self.display_texture.set(image, TextureOptions::default());
-
         egui::CentralPanel::default().show(ctx, |ui| {
-            let image = Image::from_texture(&self.display_texture).shrink_to_fit();
+            let image = Image::from_texture((self.copy_buffer_tid, [1920.0, 1080.0].into()))
+                .shrink_to_fit();
             ui.add(image);
         });
     }
@@ -250,7 +218,7 @@ impl ApplicationHandler for WinitState {
             dx11::create_device_and_swap_chain(width, height, &win32_handle);
 
         let egui_ctx = egui::Context::default();
-        let egui_renderer = egui_directx11::Renderer::new(&device).unwrap();
+        let mut egui_renderer = egui_directx11::Renderer::new(&device).unwrap();
         let egui_winit = egui_winit::State::new(
             egui_ctx.clone(),
             egui_ctx.viewport_id(),
@@ -293,9 +261,8 @@ impl ApplicationHandler for WinitState {
         unsafe { texture.GetDesc(&mut description) };
 
         description.MiscFlags = 0;
-        description.Usage.0 = D3D11_USAGE_STAGING.0;
-        description.CPUAccessFlags = D3D11_CPU_ACCESS_READ.0 as u32;
-        description.BindFlags = 0;
+        description.Usage.0 = D3D11_USAGE_DEFAULT.0;
+        description.BindFlags = D3D11_BIND_SHADER_RESOURCE.0 as u32;
         let mut new_texture: Option<ID3D11Texture2D> = None;
 
         unsafe {
@@ -316,6 +283,8 @@ impl ApplicationHandler for WinitState {
 
         let target_states = Vec::new();
 
+        let copy_buffer_tid = egui_renderer.register_native_texture(new_texture.clone());
+
         let state = Self {
             window: Some(window),
             egui_state: Some(EguiState {
@@ -326,8 +295,8 @@ impl ApplicationHandler for WinitState {
             app_state: Some(AppState {
                 system,
                 target_states,
-                display_texture: texture_handle,
                 copy_buffer: new_texture,
+                copy_buffer_tid,
             }),
             // listener: Some(listener),
             // shared_handle: Some(shared_handle),
@@ -402,7 +371,6 @@ impl ApplicationHandler for WinitState {
                         render_target,
                         &egui.ctx,
                         render_output,
-                        window.scale_factor() as _,
                     ) {
                         println!("{e}");
                         return;

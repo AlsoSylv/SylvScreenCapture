@@ -7,7 +7,7 @@ glad-gl = { path = "./glad-gl" }
 shmem = { path = "./shmem"}
 
 [workspace.dependencies.windows]
-version = "0.61"
+version = "0.62"
 default-features = false
 features = [
     "Win32_Security",
@@ -22,6 +22,7 @@ features = [
     "Win32_System_ProcessStatus",
     "Win32_Graphics_OpenGL",
     "Win32_Graphics_Direct3D",
+    "Win32_Graphics_Direct3D_Fxc",
     "Win32_Graphics_Direct3D9",
     "Win32_Graphics_Direct3D10",
     "Win32_Graphics_Direct3D11",

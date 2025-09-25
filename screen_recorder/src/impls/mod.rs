@@ -40,7 +40,7 @@ unsafe fn create_window() -> Result<(HWND, WNDCLASSEXA), Error> {
     let registered_window_class = unsafe { RegisterClassExA(&window_class) };
 
     if registered_window_class == 0 {
-        Err(windows::core::Error::from_win32())?
+        Err(windows::core::Error::from_thread())?
     }
 
     let window = unsafe {
