@@ -1,19 +1,18 @@
-use egui::{Color32, ColorImage, Frame, Image, TextureHandle, TextureId, TextureOptions};
+use egui::{Color32, Frame, Image, Pos2, TextureId};
 use shared_defs::SharedMemoryHeader;
 use shmem::Shmem;
 use std::env;
 use std::ffi::{CStr, OsString};
 // use std::io::{Read, Write};
-use std::sync::Arc;
 use sysinfo::{Pid, Process, ProcessRefreshKind, RefreshKind, System};
 use windows::Win32::Graphics::Direct3D11::{
-    D3D11_BIND_RENDER_TARGET, D3D11_BIND_SHADER_RESOURCE, D3D11_CPU_ACCESS_READ, D3D11_MAP_READ,
-    D3D11_MAPPED_SUBRESOURCE, D3D11_RESOURCE_MISC_SHARED, D3D11_RESOURCE_MISC_SHARED_NTHANDLE,
-    D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT, D3D11_USAGE_STAGING, ID3D11Device,
+    D3D11_BIND_RENDER_TARGET, D3D11_BIND_SHADER_RESOURCE, 
+    D3D11_RESOURCE_MISC_SHARED, D3D11_RESOURCE_MISC_SHARED_NTHANDLE,
+    D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT, ID3D11Device,
     ID3D11DeviceContext, ID3D11RenderTargetView, ID3D11Texture2D,
 };
 use windows::Win32::Graphics::Dxgi::Common::{
-    DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_FORMAT_R8G8B8A8_UNORM_SRGB, DXGI_SAMPLE_DESC,
+    DXGI_FORMAT_R8G8B8A8_UNORM_SRGB, DXGI_SAMPLE_DESC,
 };
 use windows::Win32::Graphics::Dxgi::{
     DXGI_PRESENT, DXGI_SHARED_RESOURCE_READ, DXGI_SHARED_RESOURCE_WRITE, IDXGIResource,
@@ -31,6 +30,7 @@ mod system_ext;
 
 fn main() {
     let event_loop = winit::event_loop::EventLoop::new().unwrap();
+    event_loop.set_control_flow(winit::event_loop::ControlFlow::Wait);
 
     let mut app = WinitState::default();
 
@@ -162,7 +162,8 @@ impl AppState {
             }
         }
 
-        egui::CentralPanel::default().show(ctx, |ui| {
+        egui::CentralPanel::default().frame(Frame::default().fill(Color32::TRANSPARENT)).show(ctx, |ui| {
+            // Flips texture, is cool but I'm not sure this is the right way to do this... : uv([Pos2::new(0.0, 1.0), Pos2::new(1.0, 0.0)])
             let image = Image::from_texture((self.copy_buffer_tid, [1920.0, 1080.0].into()))
                 .shrink_to_fit();
             ui.add(image);
@@ -240,25 +241,7 @@ impl ApplicationHandler for WinitState {
                 .unwrap()
         };
 
-        let mut texture: Option<ID3D11Texture2D> = None;
-
-        unsafe {
-            device
-                .CreateTexture2D(
-                    &d3d11_texture_description(1920, 1080, false),
-                    None,
-                    Some(&mut texture),
-                )
-                .unwrap()
-        };
-
-        let texture = texture.unwrap();
-        let resource = texture.cast::<IDXGIResource>().unwrap();
-
-        let maybe_handle = unsafe { resource.GetSharedHandle().unwrap() };
-
-        let mut description: D3D11_TEXTURE2D_DESC = D3D11_TEXTURE2D_DESC::default();
-        unsafe { texture.GetDesc(&mut description) };
+        let mut description: D3D11_TEXTURE2D_DESC = d3d11_texture_description(1920, 1080, false);
 
         description.MiscFlags = 0;
         description.Usage.0 = D3D11_USAGE_DEFAULT.0;
@@ -273,19 +256,9 @@ impl ApplicationHandler for WinitState {
 
         let new_texture = new_texture.unwrap();
 
-        println!("{maybe_handle:?}");
-
-        let texture_handle = egui_ctx.load_texture(
-            "RawDXOut",
-            Arc::new(ColorImage::default()),
-            TextureOptions::default(),
-        );
-
-        let target_states = Vec::new();
-
         let copy_buffer_tid = egui_renderer.register_native_texture(new_texture.clone());
 
-        let state = Self {
+        *self = Self {
             window: Some(window),
             egui_state: Some(EguiState {
                 ctx: egui_ctx,
@@ -294,12 +267,10 @@ impl ApplicationHandler for WinitState {
             }),
             app_state: Some(AppState {
                 system,
-                target_states,
+                target_states: Vec::new(),
                 copy_buffer: new_texture,
                 copy_buffer_tid,
             }),
-            // listener: Some(listener),
-            // shared_handle: Some(shared_handle),
             d3d11_state: Some(D3D11State {
                 ctx: context,
                 device,
@@ -307,8 +278,6 @@ impl ApplicationHandler for WinitState {
                 swap_chain,
             }),
         };
-
-        *self = state;
     }
 
     fn window_event(
@@ -389,7 +358,7 @@ impl ApplicationHandler for WinitState {
 }
 
 /// This injects using load library injection, while there are alternatives, they are not the current goal of the project
-fn inject<'a>(
+fn inject(
     process: &Process,
     device: &ID3D11Device,
 ) -> Result<(Shmem<SharedMemoryHeader>, [Option<ID3D11Texture2D>; 2]), ()> {
