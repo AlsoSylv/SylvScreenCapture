@@ -12,6 +12,7 @@ default-features = false
 features = [
     "Win32_Security",
     "Win32_UI_WindowsAndMessaging",
+    "Win32_UI_Input_KeyboardAndMouse",
     "Win32_Graphics_Gdi",
     "Win32_System_Console",
     "Win32_System_Diagnostics_Debug",
@@ -20,6 +21,7 @@ features = [
     "Win32_System_Threading",
     "Win32_System_Memory",
     "Win32_System_ProcessStatus",
+    "Win32_Graphics_Dwm",
     "Win32_Graphics_OpenGL",
     "Win32_Graphics_Direct3D",
     "Win32_Graphics_Direct3D_Fxc",

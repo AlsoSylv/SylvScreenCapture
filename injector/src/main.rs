@@ -1,4 +1,4 @@
-use egui::{Color32, Frame, Image, Pos2, TextureId};
+use egui::{Frame, Image, Layout, TextureId};
 use shared_defs::SharedMemoryHeader;
 use shmem::Shmem;
 use std::env;
@@ -6,14 +6,11 @@ use std::ffi::{CStr, OsString};
 // use std::io::{Read, Write};
 use sysinfo::{Pid, Process, ProcessRefreshKind, RefreshKind, System};
 use windows::Win32::Graphics::Direct3D11::{
-    D3D11_BIND_RENDER_TARGET, D3D11_BIND_SHADER_RESOURCE, 
-    D3D11_RESOURCE_MISC_SHARED, D3D11_RESOURCE_MISC_SHARED_NTHANDLE,
-    D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT, ID3D11Device,
+    D3D11_BIND_RENDER_TARGET, D3D11_BIND_SHADER_RESOURCE, D3D11_RESOURCE_MISC_SHARED,
+    D3D11_RESOURCE_MISC_SHARED_NTHANDLE, D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT, ID3D11Device,
     ID3D11DeviceContext, ID3D11RenderTargetView, ID3D11Texture2D,
 };
-use windows::Win32::Graphics::Dxgi::Common::{
-    DXGI_FORMAT_R8G8B8A8_UNORM_SRGB, DXGI_SAMPLE_DESC,
-};
+use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_SAMPLE_DESC};
 use windows::Win32::Graphics::Dxgi::{
     DXGI_PRESENT, DXGI_SHARED_RESOURCE_READ, DXGI_SHARED_RESOURCE_WRITE, IDXGIResource,
     IDXGIResource1, IDXGISwapChain,
@@ -47,7 +44,7 @@ fn d3d11_texture_description(width: u32, height: u32, nt_handle: bool) -> D3D11_
     D3D11_TEXTURE2D_DESC {
         Width: width,
         Height: height,
-        Format: DXGI_FORMAT_R8G8B8A8_UNORM_SRGB,
+        Format: DXGI_FORMAT_R8G8B8A8_UNORM,
         SampleDesc: DXGI_SAMPLE_DESC {
             Count: 1,
             Quality: 0,
@@ -77,58 +74,12 @@ struct AppState {
     /// This is used to copy ALL the program textures on top of each other BEFORE recording it
     copy_buffer: ID3D11Texture2D,
     copy_buffer_tid: TextureId,
+    show_window: bool,
 }
 
 impl AppState {
     pub fn update(&mut self, d3d11_state: &D3D11State, ctx: &egui::Context) {
         self.system.refresh_all();
-
-        egui::SidePanel::new(egui::panel::Side::Left, "new_side_panel")
-            .frame(Frame::NONE.fill(Color32::WHITE))
-            .resizable(false)
-            .default_width(150.0)
-            .show(ctx, |ui| {
-                let mut windows = Vec::new();
-
-                // TODO: Enum windows here
-                system_ext::System::new()
-                    .unwrap()
-                    .enum_windows(|name, process_id, window_id| {
-                        // println!("{name:?}");
-
-                        windows.push((name, process_id, window_id));
-                        true
-                    })
-                    .unwrap();
-
-                // TODO: Add HWND to shared memory
-                for (name, id, window_id) in windows {
-                    let watch = ui.button(name.to_string_lossy());
-
-                    if watch.clicked() {
-                        println!("Fuck");
-
-                        // TODO: This code needs to be in the DLL?
-                        // let dc = unsafe { GetDC(Some(window_id)) };
-                        // let format = unsafe { GetPixelFormat(dc) };
-                        // let mut desc = PIXELFORMATDESCRIPTOR::default();
-                        // let err = unsafe { DescribePixelFormat(dc, format, size_of::<PIXELFORMATDESCRIPTOR>() as u32, Some(&raw mut desc)) };
-                        // if err == 0 {
-                        //     println!("{:?}", unsafe { GetLastError() });
-                        // }
-                        // println!("{desc:?}");
-
-                        let process = self.system.process(Pid::from_u32(id)).unwrap();
-                        let (shared_mem, textures) = inject(process, &d3d11_state.device).unwrap();
-                        self.target_states.push(TargetState {
-                            name,
-                            pid: id,
-                            shared_memory: shared_mem,
-                            textures,
-                        });
-                    }
-                }
-            });
 
         self.target_states.retain(|program| {
             !program.shared_memory.loaded() | (program.shared_memory.ref_count() > 1)
@@ -162,19 +113,89 @@ impl AppState {
             }
         }
 
-        egui::CentralPanel::default().frame(Frame::default().fill(Color32::TRANSPARENT)).show(ctx, |ui| {
-            // Flips texture, is cool but I'm not sure this is the right way to do this... : uv([Pos2::new(0.0, 1.0), Pos2::new(1.0, 0.0)])
-            let image = Image::from_texture((self.copy_buffer_tid, [1920.0, 1080.0].into()))
-                .shrink_to_fit();
-            ui.add(image);
-        });
+        egui::CentralPanel::default()
+            .frame(Frame::NONE)
+            .show(ctx, |ui| {
+                // Flips texture, is cool but I'm not sure this is the right way to do this... : uv([Pos2::new(0.0, 1.0), Pos2::new(1.0, 0.0)])
+                let image = Image::from_texture((self.copy_buffer_tid, [1920.0, 1080.0].into()))
+                    .max_size([1920.0 - 500.0, 1080.0].into())
+                    .shrink_to_fit();
+                ui.with_layout(Layout::top_down(egui::Align::Center), |ui| {
+                    ui.add(image);
+                });
+
+                egui::panel::CentralPanel::default().show_inside(ui, |ui| {
+                    ui.with_layout(
+                        Layout::top_down(egui::Align::Min).with_main_wrap(true),
+                        |ui| {
+                            ui.horizontal(|ui| {
+                                ui.vertical(|ui| {
+                                    let response = ui.button("Add program");
+                                    if response.clicked() {
+                                        self.show_window = true;
+                                    }
+                                });
+                                ui.vertical(|ui| {
+                                    for program in &self.target_states {
+                                        ui.label(program.name.to_string_lossy());
+                                    }
+                                });
+                            });
+                        },
+                    );
+
+                    egui::Window::new("Add Program")
+                        .open(&mut self.show_window)
+                        .show(ctx, |ui| {
+                            let mut windows = Vec::new();
+
+                            system_ext::System::new()
+                                .unwrap()
+                                .enum_windows(|name, process_id, window_id| {
+                                    // println!("{name:?}");
+
+                                    windows.push((name, process_id, window_id));
+                                    true
+                                })
+                                .unwrap();
+
+                            for (name, id, _window_id) in windows {
+                                let watch = ui.button(name.to_string_lossy());
+
+                                if watch.clicked() {
+                                    println!("Fuck");
+
+                                    // TODO: This code needs to be in the DLL?
+                                    // let dc = unsafe { GetDC(Some(window_id)) };
+                                    // let format = unsafe { GetPixelFormat(dc) };
+                                    // let mut desc = PIXELFORMATDESCRIPTOR::default();
+                                    // let err = unsafe { DescribePixelFormat(dc, format, size_of::<PIXELFORMATDESCRIPTOR>() as u32, Some(&raw mut desc)) };
+                                    // if err == 0 {
+                                    //     println!("{:?}", unsafe { GetLastError() });
+                                    // }
+                                    // println!("{desc:?}");
+
+                                    let process = self.system.process(Pid::from_u32(id)).unwrap();
+                                    let (shared_mem, textures) =
+                                        inject(process, &d3d11_state.device).unwrap();
+                                    self.target_states.push(TargetState {
+                                        name,
+                                        _pid: id,
+                                        shared_memory: shared_mem,
+                                        textures,
+                                    });
+                                }
+                            }
+                        })
+                });
+            });
     }
 }
 
 struct TargetState {
     name: OsString,
     // TODO: Figure out why this is here?
-    pid: u32,
+    _pid: u32,
     shared_memory: shmem::Shmem<shared_defs::SharedMemoryHeader>,
     textures: [Option<ID3D11Texture2D>; 2],
 }
@@ -219,6 +240,7 @@ impl ApplicationHandler for WinitState {
             dx11::create_device_and_swap_chain(width, height, &win32_handle);
 
         let egui_ctx = egui::Context::default();
+        egui_ctx.set_theme(egui::Theme::Light);
         let mut egui_renderer = egui_directx11::Renderer::new(&device).unwrap();
         let egui_winit = egui_winit::State::new(
             egui_ctx.clone(),
@@ -270,6 +292,7 @@ impl ApplicationHandler for WinitState {
                 target_states: Vec::new(),
                 copy_buffer: new_texture,
                 copy_buffer_tid,
+                show_window: false,
             }),
             d3d11_state: Some(D3D11State {
                 ctx: context,

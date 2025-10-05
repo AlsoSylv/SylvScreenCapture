@@ -3,9 +3,13 @@ use std::{ffi::OsString, os::windows::ffi::OsStringExt};
 use windows::{
     Win32::{
         Foundation::{HWND, LPARAM, SetLastError, WIN32_ERROR},
-        UI::WindowsAndMessaging::{
-            EnumWindows, GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId,
-            IsWindowVisible,
+        Graphics::Dwm::{DWMWA_CLOAKED, DwmGetWindowAttribute},
+        UI::{
+            Input::KeyboardAndMouse::IsWindowEnabled,
+            WindowsAndMessaging::{
+                EnumWindows, GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId,
+                IsWindowVisible,
+            },
         },
     },
     core::{BOOL, Error},
@@ -47,6 +51,26 @@ impl System {
             let callback: CallbackPtr = std::ptr::with_exposed_provenance_mut(value.0 as usize);
 
             if !unsafe { IsWindowVisible(id).as_bool() } {
+                return true.into();
+            }
+
+            if !unsafe { IsWindowEnabled(id).into() } {
+                return true.into();
+            }
+
+            let mut cloaked = BOOL::default();
+            if let Err(e) = unsafe {
+                DwmGetWindowAttribute(
+                    id,
+                    DWMWA_CLOAKED,
+                    &raw mut cloaked as _,
+                    size_of_val(&cloaked) as u32,
+                )
+            } {
+                println!("{e}")
+            }
+
+            if cloaked.as_bool() {
                 return true.into();
             }
 
