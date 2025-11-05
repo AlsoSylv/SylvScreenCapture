@@ -1,20 +1,20 @@
-use crate::error::Error;
 use crate::RenderingAPI;
+use crate::error::Error;
 use retour::RawDetour;
-use shmem::SharedMemoryHeader;
+use shared_defs::SharedMemoryHeader;
 use std::mem::transmute;
 use std::sync::OnceLock;
-use windows::core::{s, Interface, HRESULT};
-use windows::Win32::Foundation::{HMODULE, HWND};
+use windows::Win32::Foundation::{E_NOINTERFACE, HMODULE, HWND};
 use windows::Win32::Graphics::Direct3D::{
     D3D_DRIVER_TYPE, D3D_DRIVER_TYPE_HARDWARE, D3D_FEATURE_LEVEL,
 };
 use windows::Win32::Graphics::Direct3D11::{
-    ID3D11Device, ID3D11Device1, ID3D11DeviceContext, ID3D11Texture2D, D3D11_SDK_VERSION,
+    D3D11_SDK_VERSION, ID3D11Device, ID3D11Device1, ID3D11DeviceContext, ID3D11Texture2D,
 };
-use windows::Win32::Graphics::Dxgi::{IDXGIAdapter, IDXGISwapChain, DXGI_SWAP_CHAIN_DESC};
+use windows::Win32::Graphics::Dxgi::{DXGI_SWAP_CHAIN_DESC, IDXGIAdapter, IDXGISwapChain};
 use windows::Win32::System::LibraryLoader::GetProcAddress;
 use windows::Win32::UI::WindowsAndMessaging::WNDCLASSEXA;
+use windows::core::{HRESULT, Interface, s};
 
 static DETOUR: OnceLock<RawDetour> = OnceLock::new();
 
@@ -122,12 +122,17 @@ pub(super) fn dx11_duplicate_hook(
 ) -> Result<(), windows::core::Error> {
     static SHARED_BUFFER: OnceLock<ID3D11Texture2D> = OnceLock::new();
 
+    // DX10 is not used
+    if DETOUR.get().is_none() {
+        return Err(windows::core::Error::new(E_NOINTERFACE, ""));
+    }
+
     let device: ID3D11Device = unsafe { this.GetDevice() }?;
     let device_1: ID3D11Device1 = device
         .cast()
         .expect("Casting `ID3D11Device` to `ID3D11Device1` should never fail");
 
-    header.set_api(shmem::RenderingAPI::Dx11);
+    header.set_api(shared_defs::RenderingAPI::Dx11);
 
     if let Some(shared_buffer) = SHARED_BUFFER.get() {
         let context = unsafe { device.GetImmediateContext() }.expect("This is not null");
@@ -145,7 +150,8 @@ pub(super) fn dx11_duplicate_hook(
         //     });
         // }
 
-        unsafe { context.CopyResource(shared_buffer, &back_buffer) };
+        // TODO: The box needs to be restricted to the smallest surface, default is src size
+        unsafe { context.CopySubresourceRegion(shared_buffer, 0, 0, 0, 0, &back_buffer, 0, None) };
     } else {
         let handle = header.get_nt_shared_handle();
 
@@ -154,7 +160,7 @@ pub(super) fn dx11_duplicate_hook(
             if let Ok(shared_buffer) = maybe_shared_buffer {
                 SHARED_BUFFER.get_or_init(|| shared_buffer);
             } else {
-                println!("Error opening shared texture: {:?}", maybe_shared_buffer)
+                println!("Error opening shared texture: {maybe_shared_buffer:?}")
             }
         }
     }

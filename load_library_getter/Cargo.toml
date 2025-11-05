@@ -1,0 +1,11 @@
+[package]
+name = "load_library_getter"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+
+[dependencies.windows-sys]
+version = "0.61.0"
+default-features = false
+features = ["Win32_System_LibraryLoader", "Win32_System_Threading", "Win32_System_Console", "Win32_Storage", "Win32_Storage_FileSystem", "Win32_System_IO"]

@@ -1,24 +1,24 @@
 use std::{mem::transmute, sync::OnceLock};
 
 use retour::RawDetour;
-use shmem::SharedMemoryHeader;
+use shared_defs::SharedMemoryHeader;
 use windows::{
-    core::{s, Interface, HRESULT},
     Win32::{
-        Foundation::{HMODULE, HWND},
+        Foundation::{E_NOINTERFACE, HMODULE, HWND},
         Graphics::{
             Direct3D10::{
-                ID3D10Device, ID3D10Device1, ID3D10Texture2D, D3D10_DRIVER_TYPE,
-                D3D10_DRIVER_TYPE_HARDWARE, D3D10_SDK_VERSION,
+                D3D10_DRIVER_TYPE, D3D10_DRIVER_TYPE_HARDWARE, D3D10_SDK_VERSION, ID3D10Device,
+                ID3D10Device1, ID3D10Texture2D,
             },
-            Dxgi::{IDXGIAdapter, IDXGISwapChain, DXGI_SWAP_CHAIN_DESC},
+            Dxgi::{DXGI_SWAP_CHAIN_DESC, IDXGIAdapter, IDXGISwapChain},
         },
         System::LibraryLoader::GetProcAddress,
         UI::WindowsAndMessaging::WNDCLASSEXA,
     },
+    core::{HRESULT, Interface, s},
 };
 
-use crate::{error::Error, RenderingAPI};
+use crate::{RenderingAPI, error::Error};
 
 static DETOUR: OnceLock<RawDetour> = OnceLock::new();
 
@@ -119,24 +119,33 @@ pub(super) fn dx10_new_present_fn(
 ) -> Result<(), windows::core::Error> {
     static SHARED_BUFFER: OnceLock<ID3D10Texture2D> = OnceLock::new();
 
+    // DX10 is not used
+    if DETOUR.get().is_none() {
+        return Err(windows::core::Error::new(E_NOINTERFACE, ""));
+    }
+
     let device: ID3D10Device = unsafe { this.GetDevice() }?;
-    header.set_api(shmem::RenderingAPI::Dx10);
+    header.set_api(shared_defs::RenderingAPI::Dx10);
 
     if let Some(shared_buffer) = SHARED_BUFFER.get() {
-        let back_buffer: ID3D10Texture2D =
-            unsafe { this.GetBuffer(0) }.expect("There's always a back buffer");
-
-        unsafe { device.CopyResource(shared_buffer, &back_buffer) };
+        // SAFETY: The back buffer is not dropped from this
+        let back_buffer: ID3D10Texture2D = unsafe { this.GetBuffer(0) }.expect("Backbuffer exists");
+        // SAFETY: This copies from the back buffer to the shared buffer
+        unsafe { device.CopySubresourceRegion(shared_buffer, 0, 0, 0, 0, &back_buffer, 0, None) };
     } else {
         let handle = header.get_shared_handle();
         if let Some(handle) = handle {
+            // SAFETY: This is always set later on in the code
             let mut texture = unsafe { std::mem::zeroed() };
+            // This makes sure that the game does not crash if the shared handle cannot be opened, but there is probably a better way to do this.
             if let Err(e) = unsafe {
                 device.OpenSharedResource(handle, &ID3D10Texture2D::IID, Some(&mut texture))
             } {
                 println!("{e}");
                 return Ok(());
             };
+
+            // SAFETY: This is an ID3D10Texture2D, so this is safe
             let texture = unsafe { ID3D10Texture2D::from_raw(texture) };
             SHARED_BUFFER.get_or_init(|| texture);
         }

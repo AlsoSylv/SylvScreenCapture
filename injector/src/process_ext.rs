@@ -1,28 +1,30 @@
 use std::{
     ffi::{OsStr, OsString},
+    io::Write,
     path::Path,
+    process::Stdio,
     ptr::null_mut,
 };
 
-use windows::{
-    core::{s, w},
-    Win32::{
-        Foundation::{DuplicateHandle, DUPLICATE_HANDLE_OPTIONS, HANDLE, HMODULE, MAX_PATH},
-        System::{
-            Diagnostics::Debug::WriteProcessMemory,
-            LibraryLoader::{GetModuleHandleW, GetProcAddress},
-            Memory::{VirtualAllocEx, MEM_COMMIT, MEM_RESERVE, PAGE_READWRITE},
-            ProcessStatus::{
-                EnumProcessModulesEx, GetModuleFileNameExW, ENUM_PROCESS_MODULES_EX_FLAGS,
-            },
-            Threading::{
-                CreateRemoteThread, OpenProcess, PROCESS_ACCESS_RIGHTS, PROCESS_CREATE_THREAD,
-                PROCESS_DUP_HANDLE, PROCESS_QUERY_INFORMATION, PROCESS_VM_OPERATION,
-                PROCESS_VM_READ, PROCESS_VM_WRITE,
-            },
+use windows::Win32::{
+    Foundation::{DUPLICATE_HANDLE_OPTIONS, DuplicateHandle, HANDLE, HMODULE, MAX_PATH},
+    System::{
+        Diagnostics::Debug::WriteProcessMemory,
+        Memory::{MEM_COMMIT, MEM_RESERVE, PAGE_READWRITE, VirtualAllocEx},
+        ProcessStatus::{
+            ENUM_PROCESS_MODULES_EX_FLAGS, EnumProcessModulesEx, GetModuleFileNameExW,
+        },
+        Threading::{
+            CreateRemoteThread, IsWow64Process, LPTHREAD_START_ROUTINE, OpenProcess,
+            PROCESS_ACCESS_RIGHTS, PROCESS_CREATE_THREAD, PROCESS_DUP_HANDLE,
+            PROCESS_QUERY_INFORMATION, PROCESS_VM_OPERATION, PROCESS_VM_READ, PROCESS_VM_WRITE,
         },
     },
 };
+
+const LOAD_LIBRARY_GETTER_64: &[u8] = include_bytes!("../.././load_library_getter_64.exe");
+
+const LOAD_LIBRARY_GETTER_32: &[u8] = include_bytes!("../.././load_library_getter_32.exe");
 
 const ATTACH_RIGHTS: PROCESS_ACCESS_RIGHTS = PROCESS_ACCESS_RIGHTS(
     PROCESS_CREATE_THREAD.0
@@ -45,34 +47,24 @@ impl Process {
         Self::try_new(process).unwrap()
     }
 
-    pub fn new_with_system(process: &sysinfo::Process) -> Process {
-        Self::try_new_with_system(process).unwrap()
-    }
-
     pub fn try_new(process: &sysinfo::Process) -> Result<Process, windows::core::Error> {
-        Self::try_new_with_system(process)
+        let pid = process.pid().as_u32();
+        Self::try_from_pid(pid)
     }
 
-    pub fn try_new_with_system(
-        process: &sysinfo::Process,
-    ) -> Result<Process, windows::core::Error> {
-        let pid = process.pid().as_u32();
-        let process_handle = unsafe { OpenProcess(ATTACH_RIGHTS, false, pid)? };
+    pub fn current_process() -> Process {
+        let pid = std::process::id();
+
+        Self::try_from_pid(pid).unwrap()
+    }
+
+    pub fn try_from_pid(pid: u32) -> Result<Process, windows::core::Error> {
+        let process_handle = unsafe { OpenProcess(ATTACH_RIGHTS, false, pid) }?;
 
         Ok(Process {
             pid,
             handle: process_handle,
         })
-    }
-
-    pub fn current_process() -> Process {
-        let pid = std::process::id();
-        let process_handle = unsafe { OpenProcess(ATTACH_RIGHTS, false, pid) }.unwrap();
-
-        Process {
-            pid,
-            handle: process_handle,
-        }
     }
 
     pub fn iter_modules(&self, mut iter: impl FnMut(&OsStr)) -> Result<(), windows::core::Error> {
@@ -86,7 +78,7 @@ impl Process {
                 null_mut(),
                 0,
                 &mut needed,
-                ENUM_PROCESS_MODULES_EX_FLAGS(0),
+                ENUM_PROCESS_MODULES_EX_FLAGS(3),
             )?
         };
 
@@ -107,7 +99,7 @@ impl Process {
                 slice_ptr,
                 size_of_val(slice) as u32,
                 &mut new_needed,
-                ENUM_PROCESS_MODULES_EX_FLAGS(0),
+                ENUM_PROCESS_MODULES_EX_FLAGS(3),
             )?
         }
 
@@ -120,7 +112,7 @@ impl Process {
                 unsafe { GetModuleFileNameExW(Some(self.handle), Some(*module), &mut name_bfr) };
 
             if len == 0 {
-                Err(windows::core::Error::from_win32())
+                Err(windows::core::Error::from_thread())
             } else {
                 use std::os::windows::prelude::*;
 
@@ -167,16 +159,39 @@ impl Process {
         Ok(shared_handle)
     }
 
+    pub fn is_64_bit(&self) -> bool {
+        let mut is_64_bit = windows::core::BOOL::default();
+
+        unsafe { IsWow64Process(self.handle, &raw mut is_64_bit).unwrap() };
+
+        !is_64_bit.as_bool()
+    }
+
     pub unsafe fn load_remote_library(
         &self,
         library_path: &Path,
     ) -> Result<(), windows::core::Error> {
-        const KERNEL_32_DLL: windows::core::PCWSTR = w!("kernel32.dll");
-        const LOAD_LIBRARY_A_C: windows::core::PCSTR = s!("LoadLibraryW");
+        let mut exe = std::env::temp_dir();
+        exe.push("load_library_getter.exe");
+        let mut file = std::fs::File::create(&exe)?;
 
-        let module = unsafe { GetModuleHandleW(KERNEL_32_DLL) }?;
-        let load_library_ptr = unsafe { GetProcAddress(module, LOAD_LIBRARY_A_C) }
-            .expect("kernel32.dll always contains LoadLibraryW");
+        if self.is_64_bit() {
+            file.write_all(LOAD_LIBRARY_GETTER_64)?;
+        } else {
+            file.write_all(LOAD_LIBRARY_GETTER_32)?;
+        };
+
+        drop(file);
+
+        let load_library_ptr = std::process::Command::new(&exe)
+            .stdout(Stdio::piped())
+            .output()
+            .unwrap();
+        let load_library_ptr = String::from_utf8(load_library_ptr.stdout).unwrap();
+        let load_library_ptr: usize = load_library_ptr.parse().unwrap();
+
+        std::fs::remove_file(exe)?;
+
         // Encode it as null terminated UTF-16
         let utf_16 = os_str_to_pcwstr(library_path.as_os_str());
         // This means that the size of the alloc is size_of::<u16> * length of slice
@@ -206,7 +221,7 @@ impl Process {
             )?;
         }
 
-        let load_library_ptr: unsafe extern "system" fn(*mut std::ffi::c_void) -> u32 =
+        let load_library_ptr: LPTHREAD_START_ROUTINE =
             unsafe { std::mem::transmute(load_library_ptr) };
 
         unsafe {
@@ -214,7 +229,7 @@ impl Process {
                 self.handle,
                 None,
                 0,
-                Some(load_library_ptr),
+                load_library_ptr,
                 Some(virtual_alloc),
                 0,
                 None,

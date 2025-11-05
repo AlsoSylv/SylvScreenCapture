@@ -2,19 +2,19 @@ use std::{mem::transmute, sync::OnceLock};
 
 use retour::RawDetour;
 use windows::{
-    core::{s, BOOL, PCSTR},
     Win32::{
         Foundation::{HMODULE, HWND},
         Graphics::{
             Gdi::{GetDC, HDC},
             OpenGL::{
-                ChoosePixelFormat, SetPixelFormat, HGLRC, PFD_DOUBLEBUFFER, PFD_DRAW_TO_WINDOW,
-                PFD_MAIN_PLANE, PFD_SUPPORT_OPENGL, PFD_TYPE_RGBA, PIXELFORMATDESCRIPTOR,
+                ChoosePixelFormat, HGLRC, PFD_DOUBLEBUFFER, PFD_DRAW_TO_WINDOW, PFD_MAIN_PLANE,
+                PFD_SUPPORT_OPENGL, PFD_TYPE_RGBA, PIXELFORMATDESCRIPTOR, SetPixelFormat,
             },
         },
         System::LibraryLoader::GetProcAddress,
         UI::WindowsAndMessaging::WNDCLASSEXA,
     },
+    core::{BOOL, PCSTR, s},
 };
 
 use crate::RenderingAPI;
@@ -93,7 +93,7 @@ impl RenderingAPI for OpenGLHooks {
         let context = unsafe { wglCreateContext(dc) };
 
         if context.is_invalid() {
-            return Err(windows::core::Error::from_win32().into());
+            return Err(windows::core::Error::from_thread().into());
         }
 
         unsafe { wglMakeCurrent(dc, context).ok()? };
@@ -184,7 +184,7 @@ unsafe extern "system" fn new_wgl_swap_buffers(un_named_1: HDC) -> BOOL {
     }
 
     let header = crate::SHARED_CPU_BUFFER.read().unwrap();
-    header.set_api(shmem::RenderingAPI::Ogl);
+    header.set_api(shared_defs::RenderingAPI::Ogl);
     let handle = header.get_nt_shared_handle();
 
     if let Some(handle) = handle {

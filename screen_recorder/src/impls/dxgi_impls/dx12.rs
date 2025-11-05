@@ -1,27 +1,28 @@
 use std::{mem::ManuallyDrop, sync::OnceLock};
 
 use retour::RawDetour;
-use shmem::SharedMemoryHeader;
+use shared_defs::SharedMemoryHeader;
 use windows::{
-    core::{s, Interface},
     Win32::{
-        Foundation::HWND,
+        Foundation::{E_NOINTERFACE, HWND},
         Graphics::{
             Direct3D::{D3D_FEATURE_LEVEL, D3D_FEATURE_LEVEL_12_0},
             Direct3D12::{
-                ID3D12CommandAllocator, ID3D12CommandQueue, ID3D12Device, ID3D12Fence,
-                ID3D12GraphicsCommandList, ID3D12Resource, D3D12_COMMAND_LIST_TYPE_COPY,
-                D3D12_COMMAND_QUEUE_DESC, D3D12_FENCE_FLAG_NONE, D3D12_TEXTURE_COPY_LOCATION,
-                D3D12_TEXTURE_COPY_LOCATION_0, D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,
+                D3D12_COMMAND_LIST_TYPE_COPY, D3D12_COMMAND_QUEUE_DESC, D3D12_FENCE_FLAG_NONE,
+                D3D12_TEXTURE_COPY_LOCATION, D3D12_TEXTURE_COPY_LOCATION_0,
+                D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX, ID3D12CommandAllocator,
+                ID3D12CommandQueue, ID3D12Device, ID3D12Fence, ID3D12GraphicsCommandList,
+                ID3D12Resource,
             },
             Dxgi::{CreateDXGIFactory, IDXGIFactory, IDXGISwapChain},
         },
         System::{
             LibraryLoader::GetProcAddress,
-            Threading::{CreateEventA, WaitForSingleObject, INFINITE},
+            Threading::{CreateEventA, INFINITE, WaitForSingleObject},
         },
         UI::WindowsAndMessaging::WNDCLASSEXA,
     },
+    core::{Interface, s},
 };
 
 use crate::RenderingAPI;
@@ -171,8 +172,13 @@ pub(super) fn dx12_duplicate_hook(
         ID3D12GraphicsCommandList,
     )> = OnceLock::new();
 
+    // DX10 is not used
+    if DETOUR.get().is_none() {
+        return Err(windows::core::Error::new(E_NOINTERFACE, ""));
+    }
+
     let device: ID3D12Device = unsafe { this.GetDevice() }?;
-    header.set_api(shmem::RenderingAPI::Dx12);
+    header.set_api(shared_defs::RenderingAPI::Dx12);
     header.set_width_and_height(1920, 1080);
 
     if let Some(buffer) = SHARED_BUFFER.get() {

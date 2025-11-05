@@ -1,13 +1,13 @@
 use windows::{
-    core::{s, PCSTR},
     Win32::{
         Foundation::HWND,
         System::LibraryLoader::GetModuleHandleA,
         UI::WindowsAndMessaging::{
-            CreateWindowExA, DestroyWindow, RegisterClassExA, UnregisterClassA, CS_HREDRAW,
-            CS_VREDRAW, WINDOW_EX_STYLE, WNDCLASSEXA, WS_OVERLAPPEDWINDOW,
+            CS_HREDRAW, CS_VREDRAW, CreateWindowExA, DestroyWindow, RegisterClassExA,
+            UnregisterClassA, WINDOW_EX_STYLE, WNDCLASSEXA, WS_OVERLAPPEDWINDOW,
         },
     },
+    core::{PCSTR, s},
 };
 
 use crate::error::Error;
@@ -40,7 +40,7 @@ unsafe fn create_window() -> Result<(HWND, WNDCLASSEXA), Error> {
     let registered_window_class = unsafe { RegisterClassExA(&window_class) };
 
     if registered_window_class == 0 {
-        Err(windows::core::Error::from_win32())?
+        Err(windows::core::Error::from_thread())?
     }
 
     let window = unsafe {
@@ -83,5 +83,5 @@ unsafe extern "system" fn def_window_pro_a(
     wparam: windows::Win32::Foundation::WPARAM,
     lparam: windows::Win32::Foundation::LPARAM,
 ) -> windows::Win32::Foundation::LRESULT {
-    windows::Win32::UI::WindowsAndMessaging::DefWindowProcA(hwnd, msg, wparam, lparam)
+    unsafe { windows::Win32::UI::WindowsAndMessaging::DefWindowProcA(hwnd, msg, wparam, lparam) }
 }

@@ -1,8 +1,8 @@
 use std::{
     ffi::c_void,
     sync::{
-        atomic::{AtomicBool, Ordering},
         OnceLock,
+        atomic::{AtomicBool, Ordering},
     },
 };
 
@@ -13,11 +13,11 @@ use windows::Win32::Graphics::Dxgi::Common::{
 use windows::Win32::Graphics::Dxgi::{DXGI_SWAP_CHAIN_DESC, DXGI_USAGE_RENDER_TARGET_OUTPUT};
 use windows::Win32::{Foundation::HWND, Graphics::Dxgi::DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL};
 use windows::{
-    core::{Interface, HRESULT},
     Win32::{
         Foundation::E_NOINTERFACE,
-        Graphics::Dxgi::{Common::DXGI_FORMAT, IDXGISwapChain, DXGI_PRESENT},
+        Graphics::Dxgi::{Common::DXGI_FORMAT, DXGI_PRESENT, IDXGISwapChain},
     },
+    core::{HRESULT, Interface},
 };
 
 pub(super) static WAS_OPENGL_CALL: AtomicBool = AtomicBool::new(false);

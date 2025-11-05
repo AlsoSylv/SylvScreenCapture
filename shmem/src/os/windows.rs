@@ -1,11 +1,20 @@
-use std::ffi::{CStr, c_void};
+use core::{
+    ffi::CStr,
+    ops::{Deref, DerefMut},
+    ptr::NonNull,
+};
 
 use windows::{
     Win32::{
-        Foundation::{CloseHandle, HANDLE},
-        System::Memory::{
-            CreateFileMappingA, FILE_MAP_ALL_ACCESS, MEMORY_MAPPED_VIEW_ADDRESS, MapViewOfFile,
-            OpenFileMappingA, PAGE_READWRITE, UnmapViewOfFile,
+        Foundation::{CloseHandle, GetLastError, HANDLE, WAIT_EVENT},
+        Storage::FileSystem::SYNCHRONIZE,
+        System::{
+            Memory::{
+                CreateFileMappingA, FILE_MAP_ALL_ACCESS, MEMORY_MAPPED_VIEW_ADDRESS, MapViewOfFile,
+                OpenFileMappingA, PAGE_READWRITE, UnmapViewOfFile,
+            },
+            Threading::{CreateMutexA, INFINITE, ReleaseMutex, WaitForSingleObject},
+            WindowsProgramming::OpenMutexA,
         },
     },
     core::{Error, PCSTR},
@@ -13,15 +22,18 @@ use windows::{
 
 use super::common::View;
 
-pub struct ShMem<'a, T>
+type ViewPtr<T> = NonNull<View<T>>;
+
+#[repr(C)]
+pub struct ShMem<T>
 where
     T: Default,
 {
     file_mapping: HANDLE,
-    view: &'a mut View<T>,
+    view: Option<ViewPtr<T>>,
 }
 
-impl<'a, T> ShMem<'a, T>
+impl<T> ShMem<T>
 where
     T: Default,
 {
@@ -33,10 +45,13 @@ where
         Self::create_or_open(name, false)
     }
 
-    fn create_or_open(name: &CStr, create: bool) -> Result<ShMem<'a, T>, Error> {
+    fn create_or_open(name: &CStr, create: bool) -> Result<Self, Error> {
         let file_mapping = if create {
             let size = size_of::<View<T>>();
+            #[cfg(target_pointer_width = "64")]
             let high = (size >> 32) as u32;
+            #[cfg(target_pointer_width = "32")]
+            let high = 0;
             let low = size as u32;
 
             // SAFETY: The mapped file must be the length of the View<T> type and needs to be created here
@@ -62,74 +77,119 @@ where
             }
         };
 
-        let view = {
-            // SAFETY: The size of the view is the same as the map, and it is a view into the `View<T>` struct
-            let address = unsafe {
-                MapViewOfFile(
-                    file_mapping,
-                    FILE_MAP_ALL_ACCESS,
-                    0,
-                    0,
-                    size_of::<View<T>>(),
-                )
-            };
-
-            // This means that the view failed
-            if address.Value.is_null() {
-                return Err(Error::from_win32());
-            }
-
-            let view = address.Value as *mut View<T>;
-            if create {
-                // SAFETY: The type of the pointer has not been erased at any step
-                // But because the View COULD be in an invalid state, it must be set to the default
-                unsafe { view.write(View::new()) };
-            }
-
-            // SAFETY: This is a non-null, valid object, which lasts for `'_`, and as such, is entirely within the safety of a rust reference
-            unsafe { &mut *view }
+        // SAFETY: The size of the view is the same as the map, and it is a view into the `View<T>` struct
+        let address = unsafe {
+            MapViewOfFile(
+                file_mapping,
+                FILE_MAP_ALL_ACCESS,
+                0,
+                0,
+                size_of::<View<T>>(),
+            )
         };
 
-        view.inc_ref_count();
+        let Some(view): Option<ViewPtr<T>> = NonNull::new(address.Value as _) else {
+            return Err(Error::from_thread());
+        };
 
-        Ok(Self { file_mapping, view })
+        if create {
+            // SAFETY: The type of the pointer has not been erased at any step
+            // But because the View COULD be in an invalid state, it must be set to the default
+            unsafe { view.write(View::new()) };
+        }
+
+        unsafe { view.as_ref().inc_ref_count() };
+
+        Ok(Self {
+            file_mapping,
+            view: Some(view),
+        })
     }
 
-    pub fn as_ref(&self) -> &T {
-        self.view.as_ref()
+    pub fn view(&self) -> &View<T> {
+        unsafe { &*self.view.unwrap().as_ref() }
     }
 
-    pub fn as_mut(&mut self) -> &mut T {
-        self.view.as_mut()
+    pub fn view_mut(&mut self) -> &mut View<T> {
+        unsafe { &mut *self.view.unwrap().as_mut() }
     }
 
-    /// #Safety
+    /// # Safety
     /// Calling this can trigger drop to be called
     /// This should only ever be called ONCE per program, either on shutdown or when the memory is no longer in use
-    pub unsafe fn dec_ref_count(&mut self) {
-        let prev = self.view.dec_ref_count();
+    pub unsafe fn dec_program_count(&mut self) {
+        let _ = self.view().dec_ref_count();
 
         unsafe {
-            // SAFETY: This is part of the fact that this function can only be called when the object is being destoryed
+            // SAFETY: The view is owned by the currnet process, and is not shared
             UnmapViewOfFile(MEMORY_MAPPED_VIEW_ADDRESS {
-                Value: self.view as *mut _ as *mut c_void,
+                Value: self.view_mut() as *mut _ as _,
             })
             .unwrap();
         }
 
-        // The refcount is now 0
-        if prev == 1 {
-            // SAFETY: If this is the last program referencing the memory, then it should be closed
-            unsafe { CloseHandle(self.file_mapping).unwrap() };
-        }
+        self.view = None;
+
+        unsafe { CloseHandle(self.file_mapping).unwrap() };
+        self.file_mapping = HANDLE::default();
     }
 }
 
-impl<T> Drop for ShMem<'_, T>
+impl<T> Deref for ShMem<T>
+where
+    T: Default,
+{
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        self.view()
+    }
+}
+
+impl<T> DerefMut for ShMem<T>
+where
+    T: Default,
+{
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.view_mut()
+    }
+}
+
+impl<T> Drop for ShMem<T>
 where
     T: Default,
 {
     fn drop(&mut self) {
-        unsafe { self.dec_ref_count() };
+        unsafe { self.dec_program_count() };
+    }
+}
+
+pub struct Mutex {
+    mutex: HANDLE,
+}
+
+impl Mutex {
+    pub fn new(name: &CStr) -> Result<Self, windows::core::Error> {
+        let mutex = unsafe { CreateMutexA(None, false, PCSTR(name.as_ptr() as _)) }?;
+
+        Ok(Self { mutex })
+    }
+
+    pub fn open(name: &CStr) -> Result<Self, windows::core::Error> {
+        let mutex = unsafe { OpenMutexA(SYNCHRONIZE.0, false, PCSTR(name.as_ptr() as _)) };
+
+        if mutex.is_invalid() {
+            return unsafe { Err(GetLastError())? };
+        }
+
+        Ok(Self { mutex })
+    }
+
+    pub fn lock(&self) -> WAIT_EVENT {
+        unsafe { WaitForSingleObject(self.mutex, INFINITE) }
+    }
+
+    pub fn release(&self) -> Result<(), windows::core::Error> {
+        unsafe { ReleaseMutex(self.mutex) }
     }
 }

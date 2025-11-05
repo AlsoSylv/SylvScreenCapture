@@ -1,13 +1,14 @@
 [package]
 name = "injector"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 
 [dependencies]
-sysinfo = { git = "https://github.com/GuillaumeGomez/sysinfo.git", rev = "0405079" }
-winit = { version = "0.30.9", features = ["rwh_06"] }
-egui-directx11 = "0.7.0"
-egui = "0.31.0"
-egui-winit = "0.31.0"
+sysinfo = { version = "0.35" }
+winit = { version = "0.30.11", features = ["rwh_06"] }
+egui-directx11 = { git = "https://github.com/AlsoSylv/egui-directx11.git" }
+egui = "0.32.3"
+egui-winit = "0.32.3"
 windows.workspace = true
 shmem.workspace = true
+shared_defs = { version = "0.1.0", path = "../shared_defs" }

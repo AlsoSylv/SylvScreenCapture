@@ -1,26 +1,23 @@
-use std::{
+use core::{
+    cell::UnsafeCell,
     ffi::CStr,
     ops::{Deref, DerefMut},
-    ptr::NonNull,
-    sync::atomic::{AtomicI32, AtomicU8, AtomicU32, AtomicU64},
 };
-
-use windows::Win32::Foundation::HANDLE;
 
 mod os;
 
-pub struct Shmem<'a, T>
+pub struct Shmem<T>
 where
     T: Default,
 {
-    inner: os::ShMem<'a, T>,
+    inner: os::ShMem<T>,
 }
 
 // In theory, as long as the inner type would be safe across multiple threads, the shared memory is
-unsafe impl<T> Send for Shmem<'_, T> where T: Send + Default {}
-unsafe impl<T> Sync for Shmem<'_, T> where T: Sync + Default {}
+unsafe impl<T> Send for Shmem<T> where T: Send + Default {}
+unsafe impl<T> Sync for Shmem<T> where T: Sync + Default {}
 
-impl<T> Shmem<'_, T>
+impl<T> Shmem<T>
 where
     T: Default,
 {
@@ -36,169 +33,109 @@ where
         }
     }
 
+    pub fn ref_count(&self) -> u8 {
+        self.inner
+            .view()
+            .ref_count()
+            .load(core::sync::atomic::Ordering::SeqCst)
+    }
+
     /// # Safety
     /// Calling this can trigger the deconstructor, and should only be called if this is the intended effect
-    pub unsafe fn dec_ref_count(&mut self) {
+    pub unsafe fn dec_program_count(&mut self) {
         unsafe {
-            self.inner.dec_ref_count();
+            self.inner.dec_program_count();
         }
     }
 }
 
-impl<T> Deref for Shmem<'_, T>
+impl<T> Deref for Shmem<T>
 where
     T: Default,
 {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
-        self.inner.as_ref()
+        &self.inner
     }
 }
 
-impl<T> DerefMut for Shmem<'_, T>
+pub struct LockedSharedMem<T>
 where
     T: Default,
 {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        self.inner.as_mut()
-    }
+    mem: UnsafeCell<os::ShMem<T>>,
+    mutex: os::Mutex,
 }
 
-#[derive(Default, Debug, PartialEq)]
-#[repr(u8)]
-pub enum RenderingAPI {
-    #[default]
-    None = 0b0000,
-    Ogl = 0b0001,
-    Vk = 0b0011,
-    Dx7 = 0b0111, // The other unloved child
-    Dx8 = 0b1111, // The unloved child
-    Dx9 = 0b1110,
-    Dx9x = 0b1100,
-    Dx10 = 0b1000,
-    Dx11 = 0b1101,
-    Dx12 = 0b1011,
-}
+impl<T> LockedSharedMem<T>
+where
+    T: Default,
+{
+    /// SAFETY: Operations on the underlying shared memory are only safe if the allocation and mutex are opened with the same name every time they're used.
+    /// Since the shared memory is reference counted, the mutex has to be locked BEFORE the allocation can be opened.
+    pub unsafe fn new(mem_name: &CStr, mutex_name: &CStr) -> Self {
+        let mutex = os::Mutex::new(mutex_name).unwrap();
+        mutex.lock();
 
-impl RenderingAPI {
-    pub fn flip(&self) -> bool {
-        matches!(self, RenderingAPI::Ogl)
+        let mem = os::ShMem::new(mem_name).unwrap();
+
+        mutex.release().unwrap();
+
+        LockedSharedMem {
+            mem: UnsafeCell::new(mem),
+            mutex,
+        }
     }
 
-    pub fn ignore_alpha(&self) -> bool {
-        matches!(self, RenderingAPI::Dx9 | RenderingAPI::Dx9x)
+    /// SAFETY: Operations on the underlying shared memory are only safe if the allocation and mutex are opened with the same name every time they're used.
+    /// Since the shared memory is reference counted, the mutex has to be locked BEFORE the allocation can be opened.
+    pub unsafe fn open(mem_name: &CStr, mutex_name: &CStr) -> Self {
+        let mutex = os::Mutex::open(mutex_name).unwrap();
+
+        mutex.lock();
+
+        let mem = os::ShMem::open(mem_name).unwrap();
+
+        mutex.release().unwrap();
+
+        LockedSharedMem {
+            mem: UnsafeCell::new(mem),
+            mutex,
+        }
     }
 
-    pub fn nt_handle_in_use(&self) -> bool {
-        matches!(
-            self,
-            RenderingAPI::Dx11 | RenderingAPI::Dx12 | RenderingAPI::Ogl | RenderingAPI::Vk
-        )
-    }
-}
+    pub fn lock(&self) -> MutexGuard<T> {
+        self.mutex.lock();
 
-impl TryFrom<u8> for RenderingAPI {
-    type Error = u8;
-
-    fn try_from(value: u8) -> Result<Self, Self::Error> {
-        use RenderingAPI::*;
-
-        match value {
-            int if int == None as u8 => Ok(None),
-            int if int == Ogl as u8 => Ok(Ogl),
-            int if int == Vk as u8 => Ok(Vk),
-            int if int == Dx7 as u8 => Ok(Dx7),
-            int if int == Dx8 as u8 => Ok(Dx8),
-            int if int == Dx9 as u8 => Ok(Dx9),
-            int if int == Dx9x as u8 => Ok(Dx9x),
-            int if int == Dx10 as u8 => Ok(Dx10),
-            int if int == Dx11 as u8 => Ok(Dx11),
-            int if int == Dx12 as u8 => Ok(Dx12),
-            int => Err(int),
+        MutexGuard {
+            mutex: &self.mutex,
+            mem: &mut *unsafe { self.mem.get().as_mut().unwrap() },
         }
     }
 }
 
-#[derive(Default)]
-#[repr(C)]
-pub struct SharedMemoryHeader {
-    /// hi: width: u32, lo: height: u32
-    dimensions: AtomicU64,
-    /// shared handle to the D3D NT Handle
-    nt_shared_handle: AtomicI32,
-    /// shared handle to the D3D Handle
-    shared_handle: AtomicI32,
-    pid: AtomicU32,
-    /**
-    None = 0b0000,
-    Ogl  = 0b0001,
-    Vk   = 0b0011,
-    Dx7  = 0b0111, // The other unloved child
-    Dx8  = 0b1111, // The unloved child
-    Dx9  = 0b1110,
-    Dx9x = 0b1100,
-    Dx10 = 0b1000,
-    Dx11 = 0b1101,
-    Dx12 = 0b1011,
-     **/
-    api: AtomicU8,
-    // Three bytes left
+pub struct MutexGuard<'a, T> {
+    mutex: &'a os::Mutex,
+    mem: &'a mut T,
 }
 
-const _: () = const { assert!(size_of::<SharedMemoryHeader>() == 24) };
-
-impl SharedMemoryHeader {
-    pub fn set_shared_handle(&self, handle: *mut std::ffi::c_void) {
-        self.shared_handle
-            .store(handle as _, std::sync::atomic::Ordering::SeqCst);
+impl<T> Drop for MutexGuard<'_, T> {
+    fn drop(&mut self) {
+        self.mutex.release().unwrap();
     }
+}
 
-    pub fn get_shared_handle(&self) -> Option<HANDLE> {
-        let handle = NonNull::new(self.shared_handle.load(std::sync::atomic::Ordering::SeqCst)
-            as u32 as usize as isize as *mut std::ffi::c_void);
-        handle.map(|ptr| HANDLE(ptr.as_ptr() as _))
+impl<T> Deref for MutexGuard<'_, T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        self.mem
     }
+}
 
-    pub fn set_nt_shared_handle(&self, handle: *mut std::ffi::c_void) {
-        self.nt_shared_handle
-            .store(handle as _, std::sync::atomic::Ordering::SeqCst);
-    }
-
-    pub fn get_nt_shared_handle(&self) -> Option<HANDLE> {
-        let handle = NonNull::new(
-            self.nt_shared_handle
-                .load(std::sync::atomic::Ordering::SeqCst) as isize
-                as *mut std::ffi::c_void,
-        );
-        handle.map(|ptr| HANDLE(ptr.as_ptr() as _))
-    }
-
-    pub fn get_width_and_height(&self) -> (u32, u32) {
-        let dimensions = self.dimensions.load(std::sync::atomic::Ordering::SeqCst);
-        ((dimensions >> 32) as _, dimensions as _)
-    }
-
-    pub fn set_width_and_height(&self, width: u32, height: u32) {
-        let width = (width as u64) << 32;
-        let height = height as u64;
-        let dimensions = width | height;
-        self.dimensions
-            .store(dimensions, std::sync::atomic::Ordering::SeqCst);
-    }
-
-    pub fn set_pid(&self) {
-        self.pid
-            .store(std::process::id(), std::sync::atomic::Ordering::SeqCst);
-    }
-
-    pub fn api(&self) -> RenderingAPI {
-        let api = self.api.load(std::sync::atomic::Ordering::SeqCst);
-        api.try_into().unwrap()
-    }
-
-    pub fn set_api(&self, api: RenderingAPI) {
-        self.api
-            .store(api as u8, std::sync::atomic::Ordering::SeqCst);
+impl<T> DerefMut for MutexGuard<'_, T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.mem
     }
 }
