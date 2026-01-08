@@ -76,7 +76,7 @@ pub static SHARED_CPU_BUFFER: LazyLock<RwLock<shmem::Shmem<shared_defs::SharedMe
 
 // Export this main as DllMain
 #[unsafe(export_name = "DllMain")]
-pub extern "stdcall" fn dll_main(hinst_dll: HINSTANCE, fdw_reason: u32, _: *mut c_void) -> BOOL {
+pub extern "system" fn dll_main(hinst_dll: HINSTANCE, fdw_reason: u32, _: *mut c_void) -> BOOL {
     let reason = if fdw_reason == SystemServices::DLL_PROCESS_DETACH {
         Reason::DllProcessDetach
     } else if fdw_reason == SystemServices::DLL_PROCESS_ATTACH {

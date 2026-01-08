@@ -11,4 +11,5 @@ egui = "0.32.3"
 egui-winit = "0.32.3"
 windows.workspace = true
 shmem.workspace = true
+encoder_abstraction.workspace = true
 shared_defs = { version = "0.1.0", path = "../shared_defs" }

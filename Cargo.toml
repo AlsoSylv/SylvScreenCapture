@@ -1,10 +1,11 @@
 [workspace]
-members = ["injector", "screen_recorder", "glad-gl", "shmem", "load_library_getter", "shared_defs"]
+members = ["injector", "screen_recorder", "glad-gl", "shmem", "load_library_getter", "shared_defs", "encoder_abstraction"]
 resolver = "2"
 
 [workspace.dependencies]
 glad-gl = { path = "./glad-gl" }
 shmem = { path = "./shmem"}
+encoder_abstraction = { path = "./encoder_abstraction" }
 
 [workspace.dependencies.windows]
 version = "0.62"

@@ -1,8 +1,10 @@
 use egui::{Frame, Image, Layout, TextureId};
+use encoder_abstraction::Config;
 use shared_defs::SharedMemoryHeader;
 use shmem::Shmem;
-use std::env;
 use std::ffi::{CStr, OsString};
+use std::io::Write;
+use std::time::Instant;
 // use std::io::{Read, Write};
 use sysinfo::{Pid, Process, ProcessRefreshKind, RefreshKind, System};
 use windows::Win32::Graphics::Direct3D11::{
@@ -12,8 +14,8 @@ use windows::Win32::Graphics::Direct3D11::{
 };
 use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_SAMPLE_DESC};
 use windows::Win32::Graphics::Dxgi::{
-    DXGI_PRESENT, DXGI_SHARED_RESOURCE_READ, DXGI_SHARED_RESOURCE_WRITE, IDXGIResource,
-    IDXGIResource1, IDXGISwapChain,
+    DXGI_PRESENT, DXGI_SHARED_RESOURCE_READ, DXGI_SHARED_RESOURCE_WRITE, IDXGIAdapter,
+    IDXGIResource, IDXGIResource1, IDXGISwapChain,
 };
 use windows::core::Interface;
 use winit::application::ApplicationHandler;
@@ -21,6 +23,8 @@ use winit::dpi::PhysicalSize;
 use winit::event::WindowEvent;
 use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use winit::window::Window;
+
+use crate::dx11::render_target;
 mod dx11;
 mod process_ext;
 mod system_ext;
@@ -34,10 +38,19 @@ fn main() {
     event_loop.run_app(&mut app).unwrap();
 }
 
-fn d3d11_texture_description(width: u32, height: u32, nt_handle: bool) -> D3D11_TEXTURE2D_DESC {
-    let mut flags = D3D11_RESOURCE_MISC_SHARED.0 as u32;
+fn d3d11_texture_description(
+    width: u32,
+    height: u32,
+    nt_handle: bool,
+    shared: bool,
+) -> D3D11_TEXTURE2D_DESC {
+    let mut flags = if shared {
+        D3D11_RESOURCE_MISC_SHARED.0 as u32
+    } else {
+        0
+    };
 
-    if nt_handle {
+    if shared && nt_handle {
         flags |= D3D11_RESOURCE_MISC_SHARED_NTHANDLE.0 as u32;
     }
 
@@ -75,17 +88,22 @@ struct AppState {
     copy_buffer: ID3D11Texture2D,
     copy_buffer_tid: TextureId,
     show_window: bool,
+    show_config_window: bool,
+    recording: bool,
+    encode_sender: Option<encoder_abstraction::Sender<encoder_abstraction::Dx11>>,
+    encode_server: Option<std::thread::JoinHandle<()>>,
+    start_time: Instant,
+    frame_idx: usize,
+    config: Config,
 }
 
 impl AppState {
-    pub fn update(&mut self, d3d11_state: &D3D11State, ctx: &egui::Context) {
-        self.system.refresh_all();
-
+    pub fn update_d3d11_texture(&mut self, d3d11_state: &D3D11State, _: &egui::Context) {
         self.target_states.retain(|program| {
             !program.shared_memory.loaded() | (program.shared_memory.ref_count() > 1)
         });
         for program in self.target_states.iter_mut() {
-            println!("{:?}", program.name);
+            // println!("{:?}", program.name);
             let header = &mut program.shared_memory;
 
             let rendering_api = header.api();
@@ -110,8 +128,38 @@ impl AppState {
                         None,
                     );
                 }
+
+                let encode_texture = create_texture(&d3d11_state.device, 1920, 1080, false, false).unwrap();
+                unsafe {
+                    d3d11_state.ctx.CopySubresourceRegion(
+                        &encode_texture,
+                        0,
+                        0,
+                        0,
+                        0,
+                        texture,
+                        0,
+                        None,
+                    );
+                }
+
+                if let Some(sender) = &mut self.encode_sender {
+                    if let Err(encoder_abstraction::EncSendError::InputFull) = sender.send(
+                        encode_texture,
+                        self.start_time.duration_since(Instant::now()).as_millis() as u64,
+                        self.frame_idx,
+                        1920 * 4,
+                    ) {
+                        println!("Frame dropped");
+                    }
+                    self.frame_idx += 1;
+                }
             }
         }
+    }
+
+    pub fn update(&mut self, d3d11_state: &D3D11State, ctx: &egui::Context) {
+        self.update_d3d11_texture(d3d11_state, ctx);
 
         egui::CentralPanel::default()
             .frame(Frame::NONE)
@@ -140,15 +188,89 @@ impl AppState {
                                         ui.label(program.name.to_string_lossy());
                                     }
                                 });
+                                ui.vertical(|ui| {
+                                    let response = ui.button("Config");
+                                    if response.clicked() {
+                                        self.show_config_window = true;
+                                    }
+
+                                    if !self.recording {
+                                        let response = ui.button("Start Recording");
+                                        if response.clicked() {
+                                            let desc =
+                                                unsafe { d3d11_state.adapter.GetDesc().unwrap() };
+                                            let vendor = match desc.VendorId {
+                                                0x8086 => panic!("Intel is not yet supported"),
+                                                0x10DE => encoder_abstraction::Vendor::Nvidia,
+                                                0x1002 => encoder_abstraction::Vendor::AMD,
+                                                unknown => panic!("Unknown vendor ID: {unknown}"),
+                                            };
+                                            let (sender, receiver) =
+                                                encoder_abstraction::Sender::init(
+                                                    vendor,
+                                                    &d3d11_state.device,
+                                                    self.config.clone(),
+                                                );
+                                            let file = std::fs::File::create("output.h264").unwrap();
+
+                                            let handle = std::thread::spawn(move || {
+                                                let mut file = file;
+                                                loop {
+                                                    if let Err(e) = receiver.recv(|slice| {
+                                                        file.write_all(slice).unwrap();
+                                                    }) {
+                                                        match e {
+                                                            encoder_abstraction::RecvError::Repeat => continue,
+                                                            encoder_abstraction::RecvError::Eof => break,
+                                                        }
+                                                    }
+                                                }
+                                            });
+
+                                            self.encode_sender = Some(sender);
+                                            self.encode_server = Some(handle);
+                                            self.start_time = Instant::now();
+                                            self.frame_idx = 0;
+                                            self.recording = true;
+                                        }
+                                    } else {
+                                        let response = ui.button("Stop recording");
+                                        if response.clicked() {
+                                            self.recording = false;
+                                            if let Some(sender) = self.encode_sender.take() && let Some(server) = self.encode_server.take() {
+                                                sender.close();
+                                                server.join().unwrap();
+                                                self.recording = false;
+                                            }
+                                        }
+                                    }
+                                })
                             });
                         },
                     );
+
+                    egui::Window::new("Config")
+                        .open(&mut self.show_config_window)
+                        .show(ctx, |ui| {
+                            egui::ComboBox::from_label("Tuning Info").show_ui(ui, |ui| {
+                                ui.selectable_value(
+                                    &mut self.config.tuning_info,
+                                    encoder_abstraction::TuningInfo::LowLatency,
+                                    "Low Latency",
+                                );
+                                ui.selectable_value(
+                                    &mut self.config.tuning_info,
+                                    encoder_abstraction::TuningInfo::UltraLowLatency,
+                                    "Ultra Low Latency",
+                                );
+                            })
+                        });
 
                     egui::Window::new("Add Program")
                         .open(&mut self.show_window)
                         .show(ctx, |ui| {
                             let mut windows = Vec::new();
-
+                            self.system.refresh_all();
                             system_ext::System::new()
                                 .unwrap()
                                 .enum_windows(|name, process_id, window_id| {
@@ -163,8 +285,6 @@ impl AppState {
                                 let watch = ui.button(name.to_string_lossy());
 
                                 if watch.clicked() {
-                                    println!("Fuck");
-
                                     // TODO: This code needs to be in the DLL?
                                     // let dc = unsafe { GetDC(Some(window_id)) };
                                     // let format = unsafe { GetPixelFormat(dc) };
@@ -211,95 +331,90 @@ struct D3D11State {
     render_target: Option<ID3D11RenderTargetView>,
     swap_chain: IDXGISwapChain,
     device: ID3D11Device,
+    adapter: IDXGIAdapter,
 }
 
 impl ApplicationHandler for WinitState {
     fn resumed(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
-        let system = System::new_with_specifics(
-            RefreshKind::nothing().with_processes(ProcessRefreshKind::nothing()),
-        );
+        pub const DEFAULT_SIZE: PhysicalSize<u32> = PhysicalSize::new(600, 600);
 
-        let size = if let Some(window) = &self.window {
-            window.outer_size()
-        } else {
-            PhysicalSize::new(600, 600)
-        };
+        if self.window.is_none() {
+            let system = System::new_with_specifics(
+                RefreshKind::nothing().with_processes(ProcessRefreshKind::nothing()),
+            );
+            let window_attributes = Window::default_attributes()
+                .with_title("dx-11-test")
+                .with_inner_size(DEFAULT_SIZE);
+            let window = event_loop.create_window(window_attributes).unwrap();
 
-        let PhysicalSize { width, height } = size;
+            let PhysicalSize { width, height } = window.outer_size();
+            let RawWindowHandle::Win32(win32_handle) = window.window_handle().unwrap().as_raw()
+            else {
+                panic!("Expected Win32 handle")
+            };
 
-        let window_attributes = Window::default_attributes()
-            .with_title("dx-11-test")
-            .with_inner_size(size);
-        let window = event_loop.create_window(window_attributes).unwrap();
+            let (swap_chain, device, context, adapter) =
+                dx11::create_device_and_swap_chain(width, height, &win32_handle);
 
-        let RawWindowHandle::Win32(win32_handle) = window.window_handle().unwrap().as_raw() else {
-            panic!("Expected Win32 handle")
-        };
+            let egui_ctx = egui::Context::default();
+            egui_ctx.set_theme(egui::Theme::Light);
+            let mut egui_renderer = egui_directx11::Renderer::new(&device).unwrap();
+            let egui_winit = egui_winit::State::new(
+                egui_ctx.clone(),
+                egui_ctx.viewport_id(),
+                &window,
+                None,
+                None,
+                None,
+            );
 
-        let (swap_chain, device, context) =
-            dx11::create_device_and_swap_chain(width, height, &win32_handle);
+            let render_target = render_target(&device, &swap_chain)
+                .expect("Render target was created successfully");
 
-        let egui_ctx = egui::Context::default();
-        egui_ctx.set_theme(egui::Theme::Light);
-        let mut egui_renderer = egui_directx11::Renderer::new(&device).unwrap();
-        let egui_winit = egui_winit::State::new(
-            egui_ctx.clone(),
-            egui_ctx.viewport_id(),
-            &window,
-            None,
-            None,
-            None,
-        );
+            let new_texture = create_texture(&device, 1920, 1080, false, false)
+                .expect("Texture was allocated successfully");
 
-        let mut render_target = None;
+            let copy_buffer_tid = egui_renderer.register_native_texture(new_texture.clone());
 
-        unsafe {
-            device
-                .CreateRenderTargetView(
-                    &swap_chain.GetBuffer::<ID3D11Texture2D>(0).unwrap(),
-                    None,
-                    Some(&mut render_target),
-                )
-                .unwrap()
-        };
 
-        let mut description: D3D11_TEXTURE2D_DESC = d3d11_texture_description(1920, 1080, false);
-
-        description.MiscFlags = 0;
-        description.Usage.0 = D3D11_USAGE_DEFAULT.0;
-        description.BindFlags = D3D11_BIND_SHADER_RESOURCE.0 as u32;
-        let mut new_texture: Option<ID3D11Texture2D> = None;
-
-        unsafe {
-            device
-                .CreateTexture2D(&description, None, Some(&mut new_texture))
-                .unwrap()
-        };
-
-        let new_texture = new_texture.unwrap();
-
-        let copy_buffer_tid = egui_renderer.register_native_texture(new_texture.clone());
-
-        *self = Self {
-            window: Some(window),
-            egui_state: Some(EguiState {
-                ctx: egui_ctx,
-                winit: egui_winit,
-                renderer: egui_renderer,
-            }),
-            app_state: Some(AppState {
-                system,
-                target_states: Vec::new(),
-                copy_buffer: new_texture,
-                copy_buffer_tid,
-                show_window: false,
-            }),
-            d3d11_state: Some(D3D11State {
-                ctx: context,
-                device,
-                render_target,
-                swap_chain,
-            }),
+            *self = Self {
+                window: Some(window),
+                egui_state: Some(EguiState {
+                    ctx: egui_ctx,
+                    winit: egui_winit,
+                    renderer: egui_renderer,
+                }),
+                app_state: Some(AppState {
+                    system,
+                    target_states: Vec::new(),
+                    copy_buffer: new_texture,
+                    copy_buffer_tid,
+                    show_window: false,
+                    show_config_window: false,
+                    // "Default" config
+                    config: Config {
+                        codec: encoder_abstraction::Codec::H264,
+                        tuning_info: encoder_abstraction::TuningInfo::LowLatency,
+                        format: encoder_abstraction::Format::RGBA,
+                        target_bit_rate: 12_000_000,
+                        resolution: [1920, 1080],
+                        frame_rate: [60, 1],
+                        gop_len: 600,
+                    },
+                    encode_sender: None,
+                    encode_server: None,
+                    recording: false,
+                    frame_idx: 0,
+                    start_time: Instant::now(),
+                }),
+                d3d11_state: Some(D3D11State {
+                    ctx: context,
+                    device,
+                    render_target,
+                    swap_chain,
+                    adapter,
+                }),
+            };
         };
     }
 
@@ -351,13 +466,11 @@ impl ApplicationHandler for WinitState {
                     let (render_output, platform_output, _) = egui_directx11::split_output(output);
 
                     egui.winit.handle_platform_output(window, platform_output);
-
                     unsafe {
                         d3d11_state
                             .ctx
                             .ClearRenderTargetView(render_target, &[0.0, 0.0, 0.0, 1.0]);
                     }
-
                     if let Err(e) = egui.renderer.render(
                         &d3d11_state.ctx,
                         render_target,
@@ -385,6 +498,8 @@ fn inject(
     process: &Process,
     device: &ID3D11Device,
 ) -> Result<(Shmem<SharedMemoryHeader>, [Option<ID3D11Texture2D>; 2]), ()> {
+    const SCREEN_RECORDER_32: &[u8] = include_bytes!("../../screen_recorder_32.dll");
+    const SCREEN_RECORDER_64: &[u8] = include_bytes!("../../screen_recorder_64.dll");
     const SHARED_RIGHTS: u32 = DXGI_SHARED_RESOURCE_READ.0 | DXGI_SHARED_RESOURCE_WRITE.0;
     // TODO: Make sure that these are the only dlls that can be targetted
     const NT_HANDLE_APIS: &[&str] = &["d3d11.dll", "d3d12.dll", "opengl32.dll", "vulkan-1.dll"];
@@ -403,15 +518,15 @@ fn inject(
         .iter_modules(|ostr| {
             let dll_name = std::path::Path::new(ostr).file_name().unwrap();
 
-            for api in NT_HANDLE_APIS {
-                if dll_name.to_ascii_lowercase() == *api {
+            for &api in NT_HANDLE_APIS {
+                if dll_name.to_ascii_lowercase() == api {
                     nt_handle |= true;
                     break;
                 }
             }
 
-            for api in HANDLE_APIS {
-                if dll_name == *api {
+            for &api in HANDLE_APIS {
+                if dll_name == api {
                     handle |= true;
                     break;
                 }
@@ -425,7 +540,7 @@ fn inject(
 
     // TODO: Is there another way to represent this? A struct maybe?
     if handle {
-        if let Some(texture) = create_texture(device, 1920, 1080, false) {
+        if let Some(texture) = create_texture(device, 1920, 1080, false, true) {
             let resource = texture.cast::<IDXGIResource>().unwrap();
 
             let handle = unsafe { resource.GetSharedHandle().unwrap() };
@@ -436,7 +551,7 @@ fn inject(
     };
 
     if nt_handle {
-        if let Some(texture) = create_texture(device, 1920, 1080, true) {
+        if let Some(texture) = create_texture(device, 1920, 1080, true, true) {
             let resource = texture.cast::<IDXGIResource1>().unwrap();
             let handle = unsafe {
                 resource
@@ -455,18 +570,15 @@ fn inject(
         }
     }
 
-    // TODO: This path should be more defined, probably included at the top of the app, and written to a set location?
-    let mut dll_path = env::current_exe().unwrap();
-    dll_path.pop();
-    dll_path.pop();
-    dll_path.pop();
+    let mut dll_path = std::env::current_dir().unwrap();
+
     if target_process.is_64_bit() {
         dll_path.push("screen_recorder_64.dll");
+        std::fs::write(&dll_path, SCREEN_RECORDER_64).unwrap();
     } else {
         dll_path.push("screen_recorder_32.dll");
+        std::fs::write(&dll_path, SCREEN_RECORDER_32).unwrap();
     }
-
-    println!("{dll_path:?}");
 
     unsafe { target_process.load_remote_library(&dll_path) }.unwrap();
 
@@ -478,11 +590,12 @@ fn create_texture(
     width: u32,
     height: u32,
     nt_handle: bool,
+    shared: bool,
 ) -> Option<ID3D11Texture2D> {
     let mut texture = None;
     unsafe {
         device.CreateTexture2D(
-            &d3d11_texture_description(width, height, nt_handle),
+            &d3d11_texture_description(width, height, nt_handle, shared),
             None,
             Some(&mut texture),
         )

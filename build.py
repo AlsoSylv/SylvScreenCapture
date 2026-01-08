@@ -32,10 +32,10 @@ for (assembly, exe) in assemblys:
         trail = 'exe' if exe else 'dll'
         x86 = "32" if x86 else "64"
         path = os.path.dirname(os.path.abspath(__file__))
-        dst = f'{path}\\{assembly}_{x86}.{trail}'
+        dst = f'{path}{os.path.sep}{assembly}_{x86}.{trail}'
         try:
             os.remove(dst)
         except OSError as e:
             print(f'\033[0;31mError\033[0m: {e}')
 
-        os.rename(f'{path}\\target\\{target}\\{profile_dir}\\{assembly}.{trail}', dst)
+        os.rename(f'{path}{os.path.sep}target{os.path.sep}{target}{os.path.sep}{profile_dir}{os.path.sep}{assembly}.{trail}', dst)

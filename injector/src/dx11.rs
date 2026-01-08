@@ -4,7 +4,7 @@ use windows::Win32::Graphics::Direct3D::{
 };
 use windows::Win32::Graphics::Direct3D11::{
     D3D11_CREATE_DEVICE_DEBUG, D3D11_SDK_VERSION, D3D11CreateDeviceAndSwapChain, ID3D11Device,
-    ID3D11DeviceContext,
+    ID3D11DeviceContext, ID3D11RenderTargetView, ID3D11Texture2D,
 };
 use windows::Win32::Graphics::Dxgi::Common::{
     DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_FORMAT_UNKNOWN, DXGI_MODE_DESC, DXGI_MODE_SCALING_UNSPECIFIED,
@@ -12,7 +12,8 @@ use windows::Win32::Graphics::Dxgi::Common::{
 };
 use windows::Win32::Graphics::Dxgi::{
     CreateDXGIFactory, DXGI_MWA_NO_ALT_ENTER, DXGI_SWAP_CHAIN_DESC, DXGI_SWAP_CHAIN_FLAG,
-    DXGI_SWAP_EFFECT_DISCARD, DXGI_USAGE_RENDER_TARGET_OUTPUT, IDXGIFactory, IDXGISwapChain,
+    DXGI_SWAP_EFFECT_DISCARD, DXGI_USAGE_RENDER_TARGET_OUTPUT, IDXGIAdapter, IDXGIFactory,
+    IDXGISwapChain,
 };
 use winit::raw_window_handle::Win32WindowHandle;
 
@@ -20,7 +21,12 @@ pub fn create_device_and_swap_chain(
     width: u32,
     height: u32,
     window: &Win32WindowHandle,
-) -> (IDXGISwapChain, ID3D11Device, ID3D11DeviceContext) {
+) -> (
+    IDXGISwapChain,
+    ID3D11Device,
+    ID3D11DeviceContext,
+    IDXGIAdapter,
+) {
     let dxgi_factory: IDXGIFactory = unsafe { CreateDXGIFactory().unwrap() };
     let adapters = unsafe { dxgi_factory.EnumAdapters(0).unwrap() };
 
@@ -76,7 +82,12 @@ pub fn create_device_and_swap_chain(
             .unwrap();
     }
 
-    (swap_chain.unwrap(), device.unwrap(), context.unwrap())
+    (
+        swap_chain.unwrap(),
+        device.unwrap(),
+        context.unwrap(),
+        adapters,
+    )
 }
 
 pub fn resize_back_buffer(
@@ -93,4 +104,21 @@ pub fn resize_back_buffer(
             DXGI_SWAP_CHAIN_FLAG(0),
         )
     }
+}
+
+pub fn render_target(
+    device: &ID3D11Device,
+    swap_chain: &IDXGISwapChain,
+) -> Result<Option<ID3D11RenderTargetView>, windows::core::Error> {
+    let mut render_target = None;
+
+    unsafe {
+        device.CreateRenderTargetView(
+            &swap_chain.GetBuffer::<ID3D11Texture2D>(0).unwrap(),
+            None,
+            Some(&mut render_target),
+        )?
+    };
+
+    Ok(render_target)
 }
