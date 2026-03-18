@@ -4,6 +4,7 @@ use shared_defs::SharedMemoryHeader;
 use shmem::Shmem;
 use std::ffi::{CStr, OsString};
 use std::io::Write;
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 // use std::io::{Read, Write};
 use sysinfo::{Pid, Process, ProcessRefreshKind, RefreshKind, System};
@@ -116,6 +117,7 @@ impl AppState {
             };
 
             if let Some(texture) = in_use_texture {
+                let guard = d3d11_state.device.lock().unwrap();
                 unsafe {
                     d3d11_state.ctx.CopySubresourceRegion(
                         &*self.copy_buffer,
@@ -128,8 +130,13 @@ impl AppState {
                         None,
                     );
                 }
+                drop(guard);
 
-                let encode_texture = create_texture(&d3d11_state.device, 1920, 1080, false, false).unwrap();
+                let guard = d3d11_state.device.lock().unwrap();
+                let encode_texture = create_texture(&guard, 1920, 1080, false, false).unwrap();
+                drop(guard);
+
+                let guard = d3d11_state.device.lock().unwrap();
                 unsafe {
                     d3d11_state.ctx.CopySubresourceRegion(
                         &encode_texture,
@@ -142,6 +149,7 @@ impl AppState {
                         None,
                     );
                 }
+                drop(guard);
 
                 if let Some(sender) = &mut self.encode_sender {
                     if let Err(encoder_abstraction::EncSendError::InputFull) = sender.send(
@@ -205,17 +213,23 @@ impl AppState {
                                                 0x1002 => encoder_abstraction::Vendor::AMD,
                                                 unknown => panic!("Unknown vendor ID: {unknown}"),
                                             };
+                                            let guard = d3d11_state.device.lock().unwrap();
                                             let (sender, receiver) =
                                                 encoder_abstraction::Sender::init(
                                                     vendor,
-                                                    &d3d11_state.device,
+                                                    &guard,
                                                     self.config.clone(),
                                                 );
+                                            drop(guard);
+
                                             let file = std::fs::File::create("output.h264").unwrap();
 
+                                            let device = d3d11_state.device.clone();
                                             let handle = std::thread::spawn(move || {
                                                 let mut file = file;
+                                                let device = device;
                                                 loop {
+                                                    let guard = device.lock().unwrap();
                                                     if let Err(e) = receiver.recv(|slice| {
                                                         file.write_all(slice).unwrap();
                                                     }) {
@@ -224,6 +238,7 @@ impl AppState {
                                                             encoder_abstraction::RecvError::Eof => break,
                                                         }
                                                     }
+                                                    drop(guard);
                                                 }
                                             });
 
@@ -296,8 +311,10 @@ impl AppState {
                                     // println!("{desc:?}");
 
                                     let process = self.system.process(Pid::from_u32(id)).unwrap();
+                                    let guard = d3d11_state.device.lock().unwrap();
                                     let (shared_mem, textures) =
-                                        inject(process, &d3d11_state.device).unwrap();
+                                        inject(process, &guard).unwrap();
+                                    drop(guard);
                                     self.target_states.push(TargetState {
                                         name,
                                         _pid: id,
@@ -330,7 +347,7 @@ struct D3D11State {
     ctx: ID3D11DeviceContext,
     render_target: Option<ID3D11RenderTargetView>,
     swap_chain: IDXGISwapChain,
-    device: ID3D11Device,
+    device: Arc<Mutex<ID3D11Device>>,
     adapter: IDXGIAdapter,
 }
 
@@ -409,7 +426,7 @@ impl ApplicationHandler for WinitState {
                 }),
                 d3d11_state: Some(D3D11State {
                     ctx: context,
-                    device,
+                    device: Arc::new(Mutex::new(device)),
                     render_target,
                     swap_chain,
                     adapter,
@@ -438,9 +455,12 @@ impl ApplicationHandler for WinitState {
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::Resized(PhysicalSize { width, height }) => {
+                println!("!!!!!!!!!!!!!ERROR!!!!!!!!!!!!!!");
                 d3d11_state.render_target.take();
 
+                let guard = d3d11_state.device.lock().unwrap();
                 dx11::resize_back_buffer(&d3d11_state.swap_chain, width, height).unwrap();
+                drop(guard);
 
                 unsafe {
                     let back_buffer = d3d11_state
@@ -448,10 +468,11 @@ impl ApplicationHandler for WinitState {
                         .GetBuffer::<ID3D11Texture2D>(0)
                         .unwrap();
                     let mut new_render_target = None;
-                    d3d11_state
-                        .device
+                    let guard = d3d11_state.device.lock().unwrap();
+                    guard
                         .CreateRenderTargetView(&back_buffer, None, Some(&mut new_render_target))
                         .unwrap();
+                    drop(guard);
 
                     d3d11_state.render_target = new_render_target;
                 }
@@ -465,12 +486,16 @@ impl ApplicationHandler for WinitState {
 
                     let (render_output, platform_output, _) = egui_directx11::split_output(output);
 
+                    let guard = d3d11_state.device.lock().unwrap();
                     egui.winit.handle_platform_output(window, platform_output);
                     unsafe {
                         d3d11_state
                             .ctx
                             .ClearRenderTargetView(render_target, &[0.0, 0.0, 0.0, 1.0]);
                     }
+                    drop(guard);
+
+                    let guard = d3d11_state.device.lock().unwrap();
                     if let Err(e) = egui.renderer.render(
                         &d3d11_state.ctx,
                         render_target,
@@ -480,10 +505,13 @@ impl ApplicationHandler for WinitState {
                         println!("{e}");
                         return;
                     };
+                    drop(guard);
 
+                    let guard = d3d11_state.device.lock().unwrap();
                     unsafe {
                         d3d11_state.swap_chain.Present(1, DXGI_PRESENT(0)).unwrap();
                     }
+                    drop(guard);
 
                     window.request_redraw();
                 }

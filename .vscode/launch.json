@@ -30,8 +30,7 @@
             "cargo": {
                 "args": [
                     "build",
-                    "--bin=injector",
-                    "--package=screen-recorder"
+                    "-p=injector",
                 ],
                 "filter": {
                     "name": "injector",

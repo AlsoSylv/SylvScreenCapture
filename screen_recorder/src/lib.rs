@@ -125,6 +125,7 @@ fn dll_attach() {
        Individual hooks should be replaced with a single DXGIHook that does this.
     */
     const OGL_DLL: PCSTR = s!("opengl32.dll");
+    // This codepath has been (tempirarily) disabled
     const D3D9_DLL: PCSTR = s!("d3d9.dll");
     const D3D10_DLL: PCSTR = s!("d3d10.dll");
     const D3D11_DLL: PCSTR = s!("d3d11.dll");
@@ -134,7 +135,7 @@ fn dll_attach() {
     // This is a list of APIs and their hooks, since all APIs need to be attempted to be hooked
     const MODULES: ModuleDispatchArray<'static> = &[
         (OGL_DLL, dll_attach_rendering_api::<impls::OpenGLHooks>),
-        (D3D9_DLL, dll_attach_rendering_api::<impls::DX9Hooks>),
+        // (D3D9_DLL, dll_attach_rendering_api::<impls::DX9Hooks>),
         (D3D10_DLL, dll_attach_rendering_api::<impls::DX10Hooks>),
         (D3D11_DLL, dll_attach_rendering_api::<impls::DX11Hooks>),
         (D3D12_DLL, dll_attach_rendering_api::<impls::DX12Hooks>),
@@ -142,12 +143,14 @@ fn dll_attach() {
     ];
 
     for (dll, hook) in MODULES {
+        print!("Trying to hook into: {:?}", unsafe { dll.to_string() });
         let call = unsafe { GetModuleHandleA(*dll) }
             .map_err(Error::from)
             .and_then(*hook);
         if let Err(e) = call {
-            println!("{e}");
+            print!("Failed to hook: {:?}, code: {e}", unsafe { dll.to_string() });
         }
+        println!()
     }
 }
 

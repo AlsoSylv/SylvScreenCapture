@@ -57,7 +57,7 @@ enum VendorInternal {
 }
 
 enum NvMessage {
-    Cnt(BitStream, RegisteredResource),
+    Cnt(BitStream, RegisteredResource, ID3D11Texture2D),
     End,
 }
 
@@ -113,16 +113,19 @@ impl EncoderReceiver {
             VendorInternalRecv::Nvidia(rx, tx) => {
                 match rx.try_recv() {
                     Ok(NvMessage::End) => Err(RecvError::Eof),
-                    Ok(NvMessage::Cnt(buf, _reg)) => {
+                    Ok(NvMessage::Cnt(buf, _reg, _tex)) => {
                         {
                             match buf.try_lock(true) {
                                 Ok(lock) => {
                                     f(lock.as_slice());
-                                },
+                                }
                                 Err(NVencError::LockBusy) => return Err(RecvError::Repeat),
                                 Err(e) => panic!("Unknown Error: {e:?}"),
                             }
                         }
+
+                        drop(_reg);
+                        drop(_tex);
                         if tx.send(buf).is_err() {
                             // This indicates the other half was dropped, safe as a recv error
                             Err(RecvError::Eof)
@@ -355,7 +358,7 @@ impl Sender<Dx11> {
                     None,
                 )
                 .unwrap();
-                match tx.send(NvMessage::Cnt(out, registered)) {
+                match tx.send(NvMessage::Cnt(out, registered, texture)) {
                     Ok(()) => Ok(()),
                     Err(e) => panic!("{e}"),
                 }

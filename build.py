@@ -6,12 +6,10 @@ gnu = False
 x86 = "i686"
 x64 = "x86_64";
 
-match (len(sys.argv)):
-    case 2: 
-        release = bool(sys.argv[1])
-    case 3: 
-        release = bool(sys.argv[1])
-        gnu = bool(sys.argv[2])
+if len(sys.argv) >= 2:
+    release = (sys.argv[1] == "True") | (sys.argv[1] == "true")
+if len(sys.argv) >= 3:
+    gnu = (sys.argv[2] == "True") | (sys.argv[2] == "true")
 
 profile = "release" if release else "dev"
 profile_dir = "release" if release else "debug"
@@ -34,7 +32,8 @@ for (assembly, exe) in assemblys:
         path = os.path.dirname(os.path.abspath(__file__))
         dst = f'{path}{os.path.sep}{assembly}_{x86}.{trail}'
         try:
-            os.remove(dst)
+            if os.path.exists(dst):
+                os.remove(dst)
         except OSError as e:
             print(f'\033[0;31mError\033[0m: {e}')
 
